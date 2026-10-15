@@ -1,4 +1,3 @@
-import { noop } from "es-toolkit/function";
 import { around } from "monkey-around";
 import type { Hotkey, KeymapContext, KeymapEventListener } from "obsidian";
 import type {
@@ -83,34 +82,38 @@ export function newHotkeyListener(
       );
 
       return (evt: KeyboardEvent, ctx: KeymapContext) => {
-        revealPrivateFilter<
+        return revealPrivateFilter<
           [$App, $HotkeyManager, $Commands, $Keymap, $BakedHotkey]
         >()(
           context,
           [app, keymap],
           (app1, keymap0) => {
             app1.hotkeyManager.bake();
-            let idx = 0;
+            let idx = 0,
+              skippedRepeat = false;
             for (const hotkey of bakedHotkeys) {
               if (keymap0.constructor.isMatch(hotkey, ctx)) {
                 const id = bakedIds[idx],
                   command = app1.commands.findCommand(id);
-                if (
-                  command &&
-                  (!evt.repeat || (command.repeatable ?? false)) &&
-                  app1.commands.executeCommand(command)
-                ) {
-                  return false;
+                if (command) {
+                  if (evt.repeat && !(command.repeatable ?? false)) {
+                    skippedRepeat = true;
+                  } else if (app1.commands.executeCommand(command)) {
+                    return false;
+                  }
                 }
               }
               ++idx;
             }
-            return true;
+            // Obsidian lets a key repeat of a command that does not repeat
+            // through. Consume it instead, so that a held hotkey does not
+            // reach the focused element once per repeat.
+            return skippedRepeat ? false : void 0;
           },
-          noop,
+          () => void 0,
         );
       };
     },
-    () => noop,
+    () => () => void 0,
   );
 }
