@@ -385,7 +385,7 @@ describe("keys.ts — hotkey management", () => {
       expect(mockApp.commands.executeCommand).not.toHaveBeenCalled();
     });
 
-    it("returns nothing for a repeat of a command that does not repeat", () => {
+    it("returns false for a repeat of a command that does not repeat, without running it", () => {
       mockKeymap.constructor.isMatch.mockReturnValue(true);
       mockApp.commands.findCommand.mockReturnValue({
         id: "command-1",
@@ -393,8 +393,68 @@ describe("keys.ts — hotkey management", () => {
       });
       mockApp.commands.executeCommand.mockReturnValue(true);
 
+      expect(press({ repeat: true })).toBe(false);
+      expect(mockApp.commands.executeCommand).not.toHaveBeenCalled();
+    });
+
+    it("runs a repeatable command again on a repeat and returns false", () => {
+      mockKeymap.constructor.isMatch.mockReturnValue(true);
+      mockApp.commands.findCommand.mockReturnValue({
+        id: "command-1",
+        name: "Test Command",
+        repeatable: true,
+      });
+      mockApp.commands.executeCommand.mockReturnValue(true);
+
+      expect(press({ repeat: true })).toBe(false);
+      expect(mockApp.commands.executeCommand).toHaveBeenCalledTimes(1);
+    });
+
+    it("runs a repeatable command that shares the hotkey on a repeat", () => {
+      const repeatable = {
+        id: "command-2",
+        name: "Repeatable Command",
+        repeatable: true,
+      };
+      mockKeymap.constructor.isMatch.mockReturnValue(true);
+      mockApp.commands.findCommand.mockImplementation((id: string) =>
+        id === "command-2"
+          ? repeatable
+          : { id: "command-1", name: "Test Command" },
+      );
+      mockApp.commands.executeCommand.mockReturnValue(true);
+
+      expect(press({ repeat: true })).toBe(false);
+      expect(mockApp.commands.executeCommand).toHaveBeenCalledTimes(1);
+      expect(mockApp.commands.executeCommand).toHaveBeenCalledWith(repeatable);
+    });
+
+    it("returns nothing for a repeat when no hotkey matches", () => {
+      mockKeymap.constructor.isMatch.mockReturnValue(false);
+
+      expect(press({ repeat: true })).toBeUndefined();
+      expect(mockApp.commands.findCommand).not.toHaveBeenCalled();
+    });
+
+    it("returns nothing for a repeat of a hotkey without a command", () => {
+      mockKeymap.constructor.isMatch.mockReturnValue(true);
+      mockApp.commands.findCommand.mockReturnValue(undefined);
+
       expect(press({ repeat: true })).toBeUndefined();
       expect(mockApp.commands.executeCommand).not.toHaveBeenCalled();
+    });
+
+    it("returns nothing for a repeat of a repeatable command that did not run", () => {
+      mockKeymap.constructor.isMatch.mockReturnValue(true);
+      mockApp.commands.findCommand.mockReturnValue({
+        id: "command-1",
+        name: "Test Command",
+        repeatable: true,
+      });
+      mockApp.commands.executeCommand.mockReturnValue(false);
+
+      expect(press({ repeat: true })).toBeUndefined();
+      expect(mockApp.commands.executeCommand).toHaveBeenCalledTimes(2);
     });
   });
 
