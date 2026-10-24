@@ -654,6 +654,33 @@ describe("keys.ts — hotkey management", () => {
 
       expect(executeCommand).not.toHaveBeenCalled();
     });
+
+    it("keeps the order of the user's hotkeys, so a shared key runs what it ran before", () => {
+      const { context, table } = setup(),
+        // The command that Obsidian's own listener runs: the first match.
+        runs = (key: Key): string | undefined => {
+          table.bake();
+          const ctx = {
+            key: key.key,
+            modifiers: compile(key.modifiers),
+            vkey: key.key,
+          };
+          return table.bakedIds[
+            table.bakedHotkeys.findIndex((hotkey) => isMatch(hotkey, ctx))
+          ];
+        };
+      // The user gave Ctrl+P to the palette first, then to the listed command.
+      table.setHotkeys(LISTED, [unlistedKey]);
+      const stored = Object.keys(table.customKeys);
+      expect(runs(unlistedKey)).toBe(UNLISTED);
+
+      newHotkeyListener(context, new Set([LISTED]));
+      // Obsidian bakes again after any change of a hotkey.
+      table.baked = false;
+
+      expect(runs(unlistedKey)).toBe(UNLISTED);
+      expect(Object.keys(table.customKeys)).toStrictEqual(stored);
+    });
   });
 
   describe("ID filtering", () => {
