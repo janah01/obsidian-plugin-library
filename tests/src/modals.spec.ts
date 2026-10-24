@@ -668,6 +668,16 @@ describe("modals.ts — modal dialogs", () => {
       expect(shownErrors).not.toHaveBeenCalled();
     });
 
+    it("imports an empty object as the defaults of every key", async () => {
+      const callback = vi.fn(),
+        { importButton } = open(callback);
+
+      await importText(importButton, "{}");
+
+      expect(callback).toHaveBeenCalledWith({ a: 1, b: 1 });
+      expect(shownErrors).not.toHaveBeenCalled();
+    });
+
     it("refuses to import data with a wrong type", async () => {
       const callback = vi.fn(),
         { importButton } = open(callback);
