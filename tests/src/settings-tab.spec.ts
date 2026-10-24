@@ -440,6 +440,68 @@ describe("settings-tab.ts — settings tab", () => {
         }).classList.contains("mod-cta"),
       ).toBe(false);
     });
+
+    it("follows the copies each time the tab is drawn again", () => {
+      const malformed = JSON.stringify({ language: "", noticeTimeout: "5" });
+      Object.assign(mockLocalSettings, {
+        value: {
+          recovery: {
+            "settings.2026-10-14T08:32:47.171Z": older,
+            "settings.2026-10-14T09:00:00.000Z": malformed,
+          },
+        },
+      });
+      const tab = new AllSettingsTab(mockContext);
+      tab.drawAllSettings(fixer);
+      const button = tab.containerEl.querySelector<HTMLButtonElement>(
+        'button[aria-label="translated-settings.all-settings-actions.recover"]',
+      );
+      if (!button) {
+        throw new Error("the Recover button was not drawn");
+      }
+      expect(button.classList.contains("mod-cta")).toBe(true);
+
+      // The Recover dialog removed the malformed copy.
+      Object.assign(mockLocalSettings, {
+        value: { recovery: { "settings.2026-10-14T08:32:47.171Z": older } },
+      });
+      tab.display();
+      expect(button.classList.contains("mod-cta")).toBe(false);
+
+      // A later start kept another malformed copy.
+      Object.assign(mockLocalSettings, {
+        value: {
+          recovery: {
+            "settings.2026-10-14T08:32:47.171Z": older,
+            "settings.2026-10-15T09:00:00.000Z": malformed,
+          },
+        },
+      });
+      tab.display();
+      expect(button.classList.contains("mod-cta")).toBe(true);
+    });
+
+    it("does not parse unchanged copies again on every change in the tab", () => {
+      // Each change in a settings field redraws the tab. A vault synced with
+      // an older version collects one copy per start of that version.
+      const recovery = Object.fromEntries(
+          Array.from({ length: 50 }, (_0, index) => [
+            `settings.2026-10-${String(10 + (index % 20))}T08:${String(10 + index)}:00.000Z`,
+            older,
+          ]),
+        ),
+        counted = vi.fn(fixer);
+      Object.assign(mockLocalSettings, { value: { recovery } });
+      const tab = new AllSettingsTab(mockContext);
+      tab.drawAllSettings(counted);
+      expect(counted).toHaveBeenCalledTimes(50);
+
+      for (let change = 0; change < 10; change += 1) {
+        tab.display();
+      }
+
+      expect(counted).toHaveBeenCalledTimes(50);
+    });
   });
 
   describe("edge cases and type safety", () => {

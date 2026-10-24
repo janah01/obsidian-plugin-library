@@ -41,7 +41,7 @@ function isPlainRecord(value: unknown): value is Record<PropertyKey, unknown> {
   return isPlainObject(value);
 }
 
-function enumerableSymbols(value: object): symbol[] {
+function enumerableSymbols(value: object): readonly symbol[] {
   return Object.getOwnPropertySymbols(value).filter((symbol) =>
     Object.prototype.propertyIsEnumerable.call(value, symbol),
   );
@@ -55,6 +55,10 @@ function keepsEverything(unchecked: unknown, fixed: unknown): boolean {
   // Plain-object pairs being compared; meeting one again closes a cycle.
   const comparing: (readonly [object, object])[] = [];
   const compare = (left: unknown, right: unknown): boolean | undefined => {
+    // A value the fixer kept as it is keeps everything it holds, however deep.
+    if (Object.is(left, right)) {
+      return true;
+    }
     if (!isPlainRecord(left) || !isPlainRecord(right)) {
       // Anything else compares as `isEqual` does, with this rule inside.
       return undefined;
@@ -72,7 +76,7 @@ function keepsEverything(unchecked: unknown, fixed: unknown): boolean {
     try {
       return [...Object.keys(left), ...symbols].every(
         (key) =>
-          Object.prototype.hasOwnProperty.call(right, key) &&
+          Object.prototype.propertyIsEnumerable.call(right, key) &&
           isEqualWith(left[key], right[key], compare),
       );
     } finally {

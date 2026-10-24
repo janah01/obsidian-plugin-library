@@ -612,6 +612,39 @@ describe("settings.ts — settings management", () => {
       ).toEqual([loaded]);
     });
 
+    it("reads data that only lacks a key again without a report or a copy", async () => {
+      // Reload and the import commands read through `read`.
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {
+        // Mock
+      });
+      const manager = new SettingsManager(mockContext, testFixer);
+      manager.load();
+      await manager.onLoaded;
+
+      await manager.read(() => ({}));
+
+      expect(manager.value.option).toBe("default");
+      expect(consoleError).not.toHaveBeenCalled();
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- expect() does not call the method, only references it
+      expect(mockContext.localSettings.mutate).not.toHaveBeenCalled();
+    });
+
+    it("reports data with a wrong type that it reads again", async () => {
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {
+        // Mock
+      });
+      const manager = new SettingsManager(mockContext, testFixer);
+      manager.load();
+      await manager.onLoaded;
+
+      await manager.read(() => ({ option: 1 }));
+
+      expect(manager.value.option).toBe("default");
+      expect(consoleError).toHaveBeenCalledTimes(1);
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- expect() does not call the method, only references it
+      expect(mockContext.localSettings.mutate).toHaveBeenCalledTimes(1);
+    });
+
     it("saves settings via plugin saveData", async () => {
       const manager = new SettingsManager(mockContext, testFixer);
 

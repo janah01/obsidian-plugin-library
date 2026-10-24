@@ -191,6 +191,12 @@ export abstract class AdvancedSettingTab<
       },
       ui,
     } = this;
+    // The tab draws again on every change in a field, so check the copies
+    // again only when the local settings that hold them changed.
+    let recoverable: {
+      readonly malformed: boolean;
+      readonly recovery: typeof localSettings.value.recovery;
+    } | null = null;
     ui.newSetting(containerEl, (setting) => {
       // Disabling undo is required for its CTA status to work properly
       let undoable = false;
@@ -250,14 +256,19 @@ export abstract class AdvancedSettingTab<
                 },
               ).open();
             });
-          if (
-            [
-              ...StorageSettingsManager.getRecovery(
-                localSettings.value.recovery,
-                SettingsManager.RECOVERY_PREFIX,
-              ).values(),
-            ].some((copy) => isStillMalformed(fixer, copy))
-          ) {
+          const { recovery } = localSettings.value;
+          if (recoverable?.recovery !== recovery) {
+            recoverable = {
+              malformed: [
+                ...StorageSettingsManager.getRecovery(
+                  recovery,
+                  SettingsManager.RECOVERY_PREFIX,
+                ).values(),
+              ].some((copy) => isStillMalformed(fixer, copy)),
+              recovery,
+            };
+          }
+          if (recoverable.malformed) {
             button.setCta();
           }
         })
