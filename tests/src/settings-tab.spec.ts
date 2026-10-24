@@ -3,12 +3,23 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { AdvancedSettingTab } from "../../src/settings-tab.js";
+import { type Fixer, markFixed } from "../../src/fixers.js";
 import type { PluginContext } from "../../src/plugin.js";
 import type { LanguageManager } from "../../src/i18n.js";
 import type {
   SettingsManager,
   StorageSettingsManager,
 } from "../../src/settings.js";
+import { launderUnchecked } from "../../src/types.js";
+
+// The Recover button is drawn through `UpdatableUI.newSetting`, which needs
+// components backed by real elements. The other widgets tested here only use
+// the no-op `addDropdown` and `addExtraButton` of these classes.
+vi.mock("obsidian", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  // Dynamic import: `vi.mock` factories run before the static imports.
+  ...(await import("../support/dom-settings.js")).DOM_SETTINGS,
+}));
 
 describe("settings-tab.ts — settings tab", () => {
   let mockContext: PluginContext;
@@ -343,6 +354,91 @@ describe("settings-tab.ts — settings tab", () => {
       tab.testNewLanguageWidget(languages, languageNamer, defaults);
 
       expect(mockI18n.t).toHaveBeenCalledWith("settings.reset");
+    });
+  });
+
+  describe("Recover button", () => {
+    class AllSettingsTab extends AdvancedSettingTab<PluginContext.Settings> {
+      protected snapshot0(): Partial<PluginContext.Settings> {
+        return {};
+      }
+
+      public drawAllSettings(fixer: Fixer<PluginContext.Settings>): void {
+        this.newAllSettingsWidget({}, fixer);
+      }
+    }
+
+    // A newer version's fixer: `errorNoticeTimeout` is the key it added.
+    const fixer: Fixer<PluginContext.Settings> = (data) => {
+      const unc = launderUnchecked<PluginContext.Settings>(data);
+      return markFixed(data, {
+        errorNoticeTimeout:
+          typeof unc.errorNoticeTimeout === "number"
+            ? unc.errorNoticeTimeout
+            : 10,
+        language: typeof unc.language === "string" ? unc.language : "",
+        noticeTimeout:
+          typeof unc.noticeTimeout === "number" ? unc.noticeTimeout : 5,
+      });
+    };
+
+    function recoverButton(
+      recovery: Readonly<Record<string, string>>,
+    ): HTMLButtonElement {
+      Object.assign(mockLocalSettings, { value: { recovery } });
+      const tab = new AllSettingsTab(mockContext);
+      tab.drawAllSettings(fixer);
+      const button = tab.containerEl.querySelector<HTMLButtonElement>(
+        'button[aria-label="translated-settings.all-settings-actions.recover"]',
+      );
+      if (!button) {
+        throw new Error("the Recover button was not drawn");
+      }
+      return button;
+    }
+
+    // What an older version saved as `data.json`: it lacks the added key.
+    const older = JSON.stringify({ language: "", noticeTimeout: 5 }, null, 2);
+
+    it("is not highlighted without a copy", () => {
+      expect(recoverButton({}).classList.contains("mod-cta")).toBe(false);
+    });
+
+    it("is not highlighted for a copy that only lacks keys the fixer adds", () => {
+      expect(
+        recoverButton({
+          "settings.2026-10-14T08:32:47.171Z": older,
+        }).classList.contains("mod-cta"),
+      ).toBe(false);
+    });
+
+    it("is highlighted for a copy with a wrong type", () => {
+      expect(
+        recoverButton({
+          "settings.2026-10-14T08:32:47.171Z": older,
+          "settings.2026-10-14T09:00:00.000Z": JSON.stringify({
+            errorNoticeTimeout: 10,
+            language: "",
+            noticeTimeout: "5",
+          }),
+        }).classList.contains("mod-cta"),
+      ).toBe(true);
+    });
+
+    it("is highlighted for a copy that does not parse", () => {
+      expect(
+        recoverButton({
+          "settings.2026-10-14T08:32:47.171Z": "{",
+        }).classList.contains("mod-cta"),
+      ).toBe(true);
+    });
+
+    it("ignores copies of local settings", () => {
+      expect(
+        recoverButton({
+          "local-settings.2026-10-14T08:32:47.171Z": "{",
+        }).classList.contains("mod-cta"),
+      ).toBe(false);
     });
   });
 
