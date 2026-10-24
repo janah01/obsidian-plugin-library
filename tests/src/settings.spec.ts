@@ -316,6 +316,33 @@ describe("settings.ts — settings management", () => {
       expect(manager.value.count).toBe(0);
     });
 
+    it("keeps the failed marker when it reads the store again", async () => {
+      const context = {
+          ...mockContext,
+          app: {
+            get appId(): never {
+              throw new Error("appId is gone");
+            },
+          },
+        } as unknown as PluginContext,
+        manager = new StorageSettingsManager(
+          context,
+          StorageSettingsManager.fix,
+          mockStorage,
+        );
+      vi.spyOn(console, "warn").mockImplementation(noop);
+      vi.spyOn(console, "debug").mockImplementation(noop);
+      vi.spyOn(console, "error").mockImplementation(noop);
+      manager.load();
+      await manager.onLoaded;
+
+      await manager.read();
+
+      expect(StorageSettingsManager.hasFailed(manager.value)).toBe(true);
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- expect() does not call the method, only references it
+      expect(mockStorage.getItem).not.toHaveBeenCalled();
+    });
+
     it("loads settings from storage", async () => {
       (mockStorage.getItem as ReturnType<typeof vi.fn>).mockReturnValue(
         JSON.stringify({ count: 10, recovery: {} }),
@@ -503,6 +530,18 @@ describe("settings.ts — settings management", () => {
       expect(failed.recovery).toEqual({});
       expect(hasFailed(fix({}).value)).toBe(false);
       expect(hasFailed(fix({ [FAILED]: false }).value)).toBe(false);
+    });
+
+    it("keeps the FAILED symbol when fix runs again, but not through JSON", () => {
+      const { FAILED, fix, hasFailed } = StorageSettingsManager,
+        once = fix({ [FAILED]: true }).value,
+        twice = fix(once);
+
+      expect(twice.valid).toBe(true);
+      expect(hasFailed(twice.value)).toBe(true);
+      // What the store holds is JSON, which cannot hold the symbol.
+      const stored: unknown = JSON.parse(JSON.stringify(once));
+      expect(hasFailed(fix(stored).value)).toBe(false);
     });
   });
 
