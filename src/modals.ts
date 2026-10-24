@@ -662,11 +662,11 @@ export class EditDataModal<T extends object> extends Modal {
               async (value) => {
                 try {
                   const unchecked: unknown = JSON.parse(value),
-                    { value: parsed } = fixer(unchecked);
+                    { value: parsed, valid } = fixer(unchecked);
                   // This runs on every change, so text without a key that the
                   // fixer would add is unfinished, such as a block deleted
                   // while editing. Import accepts such data.
-                  if (!isEqual(unchecked, parsed)) {
+                  if (!valid || !isEqual(unchecked, parsed)) {
                     throw new Error(i18n.t("errors.malformed-data"));
                   }
                   this.replaceData(parsed);

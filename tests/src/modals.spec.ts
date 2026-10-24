@@ -658,6 +658,35 @@ describe("modals.ts — modal dialogs", () => {
       );
     });
 
+    it("does not apply typed data that the fixer keeps but reports", async () => {
+      // A fixer may keep the data as it is and still call it invalid.
+      const belowTen: Fixer<Data> = (data) => {
+          const fixed = fixer(data);
+          return {
+            valid: fixed.valid && fixed.value.b < 10,
+            value: fixed.value,
+          };
+        },
+        callback = vi.fn(),
+        modal = new EditDataModal(mockContext, { a: 2, b: 3 }, belowTen, {
+          callback,
+        });
+      modal.open();
+      const textArea = modal.contentEl.querySelector("textarea");
+      if (!textArea) {
+        throw new Error("EditDataModal did not draw its data field");
+      }
+
+      await type(textArea, '{ "a": 5, "b": 10 }');
+
+      expect(callback).not.toHaveBeenCalled();
+      expect(shownErrors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "translated-errors.malformed-data",
+        }),
+      );
+    });
+
     it("imports data that only lacks a key and gives that key its default", async () => {
       const callback = vi.fn(),
         { importButton } = open(callback);
