@@ -2,13 +2,34 @@
  * Comprehensive tests for src/modals.ts — modal dialogs and UI components
  */
 import type { Setting } from "obsidian";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  type MockInstance,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+import { type Fixer, markFixed } from "../../src/fixers.js";
 import type { LanguageManager } from "../../src/i18n.js";
 import {
+  EditDataModal,
   getDefaultSuggestModalInstructions,
   ListModal,
 } from "../../src/modals.js";
 import type { PluginContext } from "../../src/plugin.js";
+import { launderUnchecked } from "../../src/types.js";
+import { tick } from "../support/helpers.js";
+
+// `EditDataModal` draws its fields through `UpdatableUI.newSetting`, which
+// needs components backed by real elements. The other tests here pass their
+// own `Setting` stand-ins and do not use these classes.
+vi.mock("obsidian", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  // Dynamic import: `vi.mock` factories run before the static imports.
+  ...(await import("../support/dom-settings.js")).DOM_SETTINGS,
+}));
 
 describe("modals.ts — modal dialogs", () => {
   let mockContext: PluginContext;
@@ -535,6 +556,130 @@ describe("modals.ts — modal dialogs", () => {
       inputter(mockSetting, true, { getter, setter }, customInput);
 
       expect(customInput).toHaveBeenCalled();
+    });
+  });
+
+  describe("EditDataModal", () => {
+    interface Data {
+      readonly a: number;
+      readonly b: number;
+    }
+
+    // Fills a missing or non-number key with 1.
+    const fixer: Fixer<Data> = (data) => {
+      const unc = launderUnchecked<Data>(data);
+      return markFixed(data, {
+        a: typeof unc.a === "number" ? unc.a : 1,
+        b: typeof unc.b === "number" ? unc.b : 1,
+      });
+    };
+
+    function open(callback: (data: Data) => unknown): {
+      readonly importButton: HTMLButtonElement;
+      readonly textArea: HTMLTextAreaElement;
+    } {
+      const modal = new EditDataModal(mockContext, { a: 2, b: 3 }, fixer, {
+          callback,
+        }),
+        { contentEl } = modal;
+      modal.open();
+      const importButton = contentEl.querySelector<HTMLButtonElement>(
+          'button[aria-label="translated-components.edit-data.import-from-clipboard"]',
+        ),
+        textArea = contentEl.querySelector("textarea");
+      if (!importButton || !textArea) {
+        throw new Error("EditDataModal did not draw its fields");
+      }
+      return { importButton, textArea };
+    }
+
+    async function type(
+      textArea: HTMLTextAreaElement,
+      text: string,
+    ): Promise<void> {
+      textArea.value = text;
+      textArea.dispatchEvent(new Event("input"));
+      await tick();
+    }
+
+    async function importText(
+      button: HTMLButtonElement,
+      text: string,
+    ): Promise<void> {
+      vi.spyOn(navigator.clipboard, "readText").mockResolvedValue(text);
+      button.click();
+      await tick();
+    }
+
+    // `EditDataModal` logs each error it shows.
+    let shownErrors: MockInstance<Console["debug"]>;
+
+    beforeEach(() => {
+      shownErrors = vi.spyOn(console, "debug").mockImplementation(() => {
+        // Mock
+      });
+    });
+
+    it("applies typed data that holds every key", async () => {
+      const callback = vi.fn(),
+        { textArea } = open(callback);
+
+      await type(textArea, '{ "a": 5, "b": 3 }');
+
+      expect(callback).toHaveBeenCalledWith({ a: 5, b: 3 });
+    });
+
+    it("does not apply typed data that lacks a key", async () => {
+      const callback = vi.fn(),
+        { textArea } = open(callback);
+
+      // Deleting a line while editing leaves valid JSON without the key.
+      await type(textArea, '{ "a": 5 }');
+
+      expect(callback).not.toHaveBeenCalled();
+      expect(shownErrors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "translated-errors.malformed-data",
+        }),
+      );
+    });
+
+    it("does not apply typed data with a wrong type", async () => {
+      const callback = vi.fn(),
+        { textArea } = open(callback);
+
+      await type(textArea, '{ "a": "5", "b": 3 }');
+
+      expect(callback).not.toHaveBeenCalled();
+      expect(shownErrors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "translated-errors.malformed-data",
+        }),
+      );
+    });
+
+    it("imports data that only lacks a key and gives that key its default", async () => {
+      const callback = vi.fn(),
+        { importButton } = open(callback);
+
+      await importText(importButton, '{ "a": 5 }');
+
+      expect(callback).toHaveBeenCalledWith({ a: 5, b: 1 });
+      expect(shownErrors).not.toHaveBeenCalled();
+    });
+
+    it("refuses to import data with a wrong type", async () => {
+      const callback = vi.fn(),
+        { importButton } = open(callback);
+
+      await importText(importButton, '{ "a": "5" }');
+
+      expect(callback).not.toHaveBeenCalled();
+      expect(shownErrors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "translated-errors.malformed-data",
+        }),
+      );
     });
   });
 

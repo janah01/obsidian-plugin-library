@@ -1,4 +1,5 @@
 import { noop } from "es-toolkit/function";
+import { isEqual } from "es-toolkit/predicate";
 import {
   App,
   type ButtonComponent,
@@ -660,8 +661,12 @@ export class EditDataModal<T extends object> extends Modal {
               },
               async (value) => {
                 try {
-                  const { value: parsed, valid } = fixer(JSON.parse(value));
-                  if (!valid) {
+                  const unchecked: unknown = JSON.parse(value),
+                    { value: parsed } = fixer(unchecked);
+                  // This runs on every change, so text without a key that the
+                  // fixer would add is unfinished, such as a block deleted
+                  // while editing. Import accepts such data.
+                  if (!isEqual(unchecked, parsed)) {
                     throw new Error(i18n.t("errors.malformed-data"));
                   }
                   this.replaceData(parsed);

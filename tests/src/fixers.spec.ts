@@ -94,6 +94,81 @@ describe("fixers.ts — settings validation and fixing", () => {
       };
       expect(markFixed(unchecked, fixed).valid).toBe(true);
     });
+
+    it("accepts a value that only lacks a key the fixer added", () => {
+      expect(markFixed({ a: 1 }, { a: 1, b: 2 }).valid).toBe(true);
+    });
+
+    it("accepts a value that only lacks a nested key the fixer added", () => {
+      expect(markFixed({ o: { a: 1 } }, { o: { a: 1, b: 2 } }).valid).toBe(
+        true,
+      );
+    });
+
+    it("accepts an array element that only lacks a key the fixer added", () => {
+      expect(markFixed([{ a: 1 }], [{ a: 1, b: 2 }]).valid).toBe(true);
+    });
+
+    it("accepts an empty object that the fixer filled", () => {
+      expect(markFixed({}, { a: 1, b: { c: 2 } }).valid).toBe(true);
+    });
+
+    it("rejects a changed or retyped value next to an added key", () => {
+      expect(markFixed({ a: 1 }, { a: 2, b: 2 }).valid).toBe(false);
+      expect(markFixed({ a: "1" }, { a: 1 }).valid).toBe(false);
+      expect(markFixed({ o: { a: "1" } }, { o: { a: 1, b: 2 } }).valid).toBe(
+        false,
+      );
+    });
+
+    it("rejects a key the fixer dropped", () => {
+      expect(markFixed({ a: 1, z: 2 }, { a: 1 }).valid).toBe(false);
+      expect(markFixed({ a: 1, o: "x" }, { a: 1 }).valid).toBe(false);
+      expect(
+        markFixed({ o: { a: 1, z: 2 } }, { o: { a: 1, b: 2 } }).valid,
+      ).toBe(false);
+      expect(
+        markFixed(JSON.parse('{"__proto__":{"a":1},"b":1}'), { b: 1 }).valid,
+      ).toBe(false);
+    });
+
+    it("rejects a value that is not a plain object where the fixer made one", () => {
+      expect(markFixed("x", {}).valid).toBe(false);
+      expect(markFixed([], {}).valid).toBe(false);
+      expect(markFixed(null, {}).valid).toBe(false);
+      expect(markFixed({}, []).valid).toBe(false);
+      expect(markFixed({ o: [] }, { o: { a: 1 } }).valid).toBe(false);
+    });
+
+    it("rejects an array that grew or shrank", () => {
+      expect(markFixed([1, 2], [1, 2, 3]).valid).toBe(false);
+      expect(markFixed([1, 2, 3], [1, 2]).valid).toBe(false);
+      expect(markFixed([{ a: 1 }], [{ a: 1 }, { a: 2 }]).valid).toBe(false);
+    });
+
+    it("compares symbol keys strictly", () => {
+      const symbol = Symbol("marker");
+      expect(markFixed({ [symbol]: true }, { recovery: {} }).valid).toBe(false);
+      expect(markFixed({ a: 1 }, { a: 1, [symbol]: true }).valid).toBe(false);
+      expect(markFixed({ [symbol]: true }, { [symbol]: false }).valid).toBe(
+        false,
+      );
+      expect(
+        markFixed({ [symbol]: true }, { [symbol]: true, b: 1 }).valid,
+      ).toBe(true);
+    });
+
+    it("terminates on cyclic values", () => {
+      const cyclic: Record<string, unknown> = {};
+      cyclic["self"] = cyclic;
+      expect(markFixed(cyclic, { self: cyclic, x: 1 }).valid).toBe(true);
+
+      const even: Record<string, unknown> = {},
+        odd: Record<string, unknown> = { self: even };
+      even["self"] = odd;
+      expect(markFixed(cyclic, even).valid).toBe(true);
+      expect(markFixed(cyclic, { self: { self: 1 } }).valid).toBe(false);
+    });
   });
 
   describe("fixTyped", () => {
