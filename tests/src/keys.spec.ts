@@ -514,6 +514,60 @@ describe("keys.ts — hotkey management", () => {
       // eslint-disable-next-line @typescript-eslint/unbound-method -- expect() does not call the method, only references it
       expect(mockContext.register).toHaveBeenCalled();
     });
+
+    it("keeps the order of the user's hotkeys, so a shared key runs what it ran before", () => {
+      // The hotkey table of Obsidian 1.14.4: it hands out a copy of the
+      // user's keys, appends a command whose keys it sets, and bakes the
+      // user's keys in their order. The first match of a key runs.
+      class HotkeyTable {
+        public baked = false;
+        public bakedHotkeys: readonly unknown[] = [];
+        public bakedIds: readonly string[] = [];
+        public readonly defaultKeys: Record<string, readonly unknown[]> = {};
+        readonly #own = new Map<string, readonly unknown[]>();
+
+        public get customKeys(): Record<string, readonly unknown[]> {
+          return Object.fromEntries(this.#own);
+        }
+
+        public setHotkeys(id: string, keys: readonly unknown[]): void {
+          this.#own.set(id, keys);
+          this.baked = false;
+        }
+
+        public removeHotkeys(id: string): void {
+          this.#own.delete(id);
+          this.baked = false;
+        }
+
+        public bake(): void {
+          if (this.baked) {
+            return;
+          }
+          this.baked = true;
+          this.bakedIds = [...this.#own].flatMap(([id, keys]) =>
+            keys.map(() => id),
+          );
+        }
+      }
+      const table = new HotkeyTable(),
+        ctrlP = [{ key: "p", modifiers: ["Ctrl"] }];
+      // The user gave Ctrl+P to the palette first, then to a listed command.
+      table.setHotkeys("command-palette:open", ctrlP);
+      table.setHotkeys("command-1", ctrlP);
+      mockApp.hotkeyManager = table as unknown as MockHotkeyManager;
+
+      newHotkeyListener(mockContext, new Set(["command-1"]));
+      // Obsidian bakes again after any change of a hotkey.
+      table.baked = false;
+      table.bake();
+
+      expect(Object.keys(table.customKeys)).toEqual([
+        "command-palette:open",
+        "command-1",
+      ]);
+      expect(table.bakedIds[0]).toBe("command-palette:open");
+    });
   });
 
   describe("edge cases and error handling", () => {
