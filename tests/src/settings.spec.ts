@@ -332,6 +332,58 @@ describe("settings.ts — settings management", () => {
       expect(manager.value.count).toBe(0); // Default value from fixer
     });
 
+    it("loads stored data that only lacks a key without a report or a copy", async () => {
+      (mockStorage.getItem as ReturnType<typeof vi.fn>).mockReturnValue(
+        JSON.stringify({ recovery: {} }),
+      );
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {
+        // Mock
+      });
+
+      const manager = new StorageSettingsManager(
+        mockContext,
+        testFixer,
+        mockStorage,
+      );
+
+      manager.load();
+      await manager.onLoaded;
+
+      expect(manager.value.count).toBe(0);
+      expect(consoleError).not.toHaveBeenCalled();
+      expect(Object.keys(manager.value.recovery)).toEqual([]);
+    });
+
+    it("reports stored data with a wrong type and keeps a copy", async () => {
+      const stored = { count: "10", recovery: {} };
+      (mockStorage.getItem as ReturnType<typeof vi.fn>).mockReturnValue(
+        JSON.stringify(stored),
+      );
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {
+        // Mock
+      });
+
+      const manager = new StorageSettingsManager(
+        mockContext,
+        testFixer,
+        mockStorage,
+      );
+
+      manager.load();
+      await manager.onLoaded;
+
+      expect(manager.value.count).toBe(0);
+      expect(consoleError).toHaveBeenCalledTimes(1);
+      expect(Object.keys(manager.value.recovery)).toEqual([
+        expect.stringMatching(/^local-settings\./u),
+      ]);
+      expect(
+        Object.values(manager.value.recovery).map((copy): unknown =>
+          JSON.parse(copy),
+        ),
+      ).toEqual([stored]);
+    });
+
     it("handles JSON parse errors", async () => {
       (mockStorage.getItem as ReturnType<typeof vi.fn>).mockReturnValue(
         "invalid json",
@@ -399,10 +451,10 @@ describe("settings.ts — settings management", () => {
       expect(fixed.value.recovery).toEqual({ key1: "value1" });
     });
 
-    it("handles missing recovery property", () => {
+    it("accepts data that only lacks recovery", () => {
       const fixed = StorageSettingsManager.fix({});
 
-      expect(fixed.valid).toBe(false);
+      expect(fixed.valid).toBe(true);
       expect(fixed.value.recovery).toEqual({});
     });
 
@@ -511,6 +563,53 @@ describe("settings.ts — settings management", () => {
       // eslint-disable-next-line @typescript-eslint/unbound-method -- expect() does not call the method, only references it
       expect(mockContext.loadData).toHaveBeenCalled();
       expect(manager.value.option).toBe("loaded");
+    });
+
+    it("loads data that only lacks a key without a report or a copy", async () => {
+      (mockContext.loadData as ReturnType<typeof vi.fn>).mockResolvedValue({});
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {
+        // Mock
+      });
+      const manager = new SettingsManager(mockContext, testFixer);
+
+      manager.load();
+      await manager.onLoaded;
+
+      expect(manager.value.option).toBe("default");
+      expect(consoleError).not.toHaveBeenCalled();
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- expect() does not call the method, only references it
+      expect(mockContext.localSettings.mutate).not.toHaveBeenCalled();
+    });
+
+    it("reports data with a wrong type and keeps a copy", async () => {
+      const loaded = { option: 1 },
+        recovery: Record<string, string> = {};
+      (mockContext.loadData as ReturnType<typeof vi.fn>).mockResolvedValue(
+        loaded,
+      );
+      (
+        mockContext.localSettings.mutate as ReturnType<typeof vi.fn>
+      ).mockImplementation(
+        (mutator: (lsm: { recovery: Record<string, string> }) => unknown) => {
+          mutator({ recovery });
+        },
+      );
+      const consoleError = vi.spyOn(console, "error").mockImplementation(() => {
+        // Mock
+      });
+      const manager = new SettingsManager(mockContext, testFixer);
+
+      manager.load();
+      await manager.onLoaded;
+
+      expect(manager.value.option).toBe("default");
+      expect(consoleError).toHaveBeenCalledTimes(1);
+      expect(Object.keys(recovery)).toEqual([
+        expect.stringMatching(/^settings\./u),
+      ]);
+      expect(
+        Object.values(recovery).map((copy): unknown => JSON.parse(copy)),
+      ).toEqual([loaded]);
     });
 
     it("saves settings via plugin saveData", async () => {

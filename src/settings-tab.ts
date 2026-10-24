@@ -251,10 +251,12 @@ export abstract class AdvancedSettingTab<
               ).open();
             });
           if (
-            StorageSettingsManager.getRecovery(
-              localSettings.value.recovery,
-              SettingsManager.RECOVERY_PREFIX,
-            ).size !== 0
+            [
+              ...StorageSettingsManager.getRecovery(
+                localSettings.value.recovery,
+                SettingsManager.RECOVERY_PREFIX,
+              ).values(),
+            ].some((copy) => isStillMalformed(fixer, copy))
           ) {
             button.setCta();
           }
@@ -432,4 +434,19 @@ export abstract class AdvancedSettingTab<
   }
 
   protected abstract snapshot0(): Partial<S>;
+}
+
+/**
+ * Whether the current fixer still rejects a recovery copy of the settings. A
+ * copy it accepts lost nothing when it was fixed, such as one an older
+ * version saved because a newer version only added settings, so it does not
+ * ask for attention. A copy that does not parse does.
+ */
+function isStillMalformed<T>(fixer: Fixer<T>, copy: string): boolean {
+  try {
+    return !fixer(JSON.parse(copy)).valid;
+  } catch (error) {
+    /* @__PURE__ */ self.console.debug(error);
+    return true;
+  }
 }
