@@ -900,6 +900,62 @@ describe("obsidian.ts — Obsidian API utilities", () => {
       status.report(new Error("Malformed data"));
       expect(element.textContent).toBe("Malformed data");
     });
+
+    it("shows the message of an error of any kind", () => {
+      class ImportError extends Error {
+        public override readonly name = "ImportError";
+      }
+      const element = document.createElement("div"),
+        status = statusUI(new UpdatableUI(), element);
+
+      for (const error of [
+        new TypeError("Failed to fetch"),
+        new ImportError("Malformed data"),
+        new DOMException("Document is not focused.", "NotAllowedError"),
+        new AggregateError([new Error("inner")], "Several errors"),
+      ]) {
+        status.report(error);
+        expect(element.textContent).toBe(error.message);
+      }
+    });
+
+    it("shows an empty line for an error without a message and clears it", () => {
+      const element = document.createElement("div"),
+        status = statusUI(new UpdatableUI(), element);
+
+      status.report(new Error("Malformed data"));
+      status.report(new Error());
+      expect(element.textContent).toBe("");
+
+      status.report(new Error("Malformed data"));
+      status.report();
+      expect(element.textContent).toBe("");
+    });
+
+    it("shows a status that only looks like an error as JSON", () => {
+      const element = document.createElement("div"),
+        status = statusUI(new UpdatableUI(), element),
+        lookalike = { message: "Malformed data", name: "Error" };
+
+      status.report(lookalike);
+      expect(element.textContent).toBe(toJSONOrString(lookalike));
+
+      status.report("Malformed data");
+      expect(element.textContent).toBe(toJSONOrString("Malformed data"));
+    });
+
+    it("shows the message of an error in an element without a window", () => {
+      // A document without a window, such as one of a closed pop-out.
+      const element = document.implementation
+          .createHTMLDocument()
+          .createElement("div"),
+        warn = vi.spyOn(console, "warn").mockImplementation(noop);
+
+      statusUI(new UpdatableUI(), element).report(new Error("Malformed data"));
+
+      expect(element.textContent).toBe("Malformed data");
+      expect(warn).not.toHaveBeenCalled();
+    });
   });
 
   describe("cleanFrontmatterCache", () => {
