@@ -1,6 +1,7 @@
 /**
  * Comprehensive tests for src/settings.ts — settings management
  */
+import { noop } from "es-toolkit/function";
 import type { DeepWritable } from "ts-essentials";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Fixer } from "../../src/fixers.js";
@@ -12,6 +13,7 @@ import {
   StorageSettingsManager,
   registerSettingsCommands,
 } from "../../src/settings.js";
+import { launderUnchecked } from "../../src/types.js";
 
 describe("settings.ts — settings management", () => {
   beforeEach(() => {
@@ -280,6 +282,40 @@ describe("settings.ts — settings management", () => {
       expect(manager).toBeDefined();
     });
 
+    it("loads settings that hasFailed sees when the storage key is not found", async () => {
+      // The key needs a private API of Obsidian, which may change.
+      const context = {
+          ...mockContext,
+          app: {
+            get appId(): never {
+              throw new Error("appId is gone");
+            },
+          },
+        } as unknown as PluginContext,
+        // A fixer of a plugin builds on `StorageSettingsManager.fix`.
+        fixer: Fixer<TestLocalSettings> = (data) => {
+          const unc = launderUnchecked<TestLocalSettings>(data);
+          return markFixed(data, {
+            ...StorageSettingsManager.fix(data).value,
+            count: typeof unc.count === "number" ? unc.count : 0,
+          });
+        },
+        consoleWarn = vi.spyOn(console, "warn").mockImplementation(noop),
+        manager = new StorageSettingsManager(context, fixer, mockStorage);
+      vi.spyOn(console, "debug").mockImplementation(noop);
+      vi.spyOn(console, "error").mockImplementation(noop);
+
+      manager.load();
+      await manager.onLoaded;
+
+      expect(consoleWarn).toHaveBeenCalledWith(
+        "translated-errors.private-API-changed",
+        expect.any(Error),
+      );
+      expect(StorageSettingsManager.hasFailed(manager.value)).toBe(true);
+      expect(manager.value.count).toBe(0);
+    });
+
     it("loads settings from storage", async () => {
       (mockStorage.getItem as ReturnType<typeof vi.fn>).mockReturnValue(
         JSON.stringify({ count: 10, recovery: {} }),
@@ -509,6 +545,16 @@ describe("settings.ts — settings management", () => {
 
       expect(StorageSettingsManager.hasFailed(failedSettings)).toBe(true);
       expect(StorageSettingsManager.hasFailed(normalSettings)).toBe(false);
+    });
+
+    it("keeps the FAILED symbol through fix", () => {
+      const { FAILED, fix, hasFailed } = StorageSettingsManager,
+        failed = fix({ [FAILED]: true }).value;
+
+      expect(hasFailed(failed)).toBe(true);
+      expect(failed.recovery).toEqual({});
+      expect(hasFailed(fix({}).value)).toBe(false);
+      expect(hasFailed(fix({ [FAILED]: false }).value)).toBe(false);
     });
   });
 
