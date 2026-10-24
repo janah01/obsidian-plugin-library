@@ -89,22 +89,26 @@ export function newHotkeyListener(
           [app, keymap],
           (app1, keymap0) => {
             app1.hotkeyManager.bake();
-            let idx = 0;
+            let idx = 0,
+              skippedRepeat = false;
             for (const hotkey of bakedHotkeys) {
               if (keymap0.constructor.isMatch(hotkey, ctx)) {
                 const id = bakedIds[idx],
                   command = app1.commands.findCommand(id);
-                if (
-                  command &&
-                  (!evt.repeat || (command.repeatable ?? false)) &&
-                  app1.commands.executeCommand(command)
-                ) {
-                  return false;
+                if (command) {
+                  if (evt.repeat && !(command.repeatable ?? false)) {
+                    skippedRepeat = true;
+                  } else if (app1.commands.executeCommand(command)) {
+                    return false;
+                  }
                 }
               }
               ++idx;
             }
-            return void 0;
+            // Obsidian lets a key repeat of a command that does not repeat
+            // through. Consume it instead, so that a held hotkey does not
+            // reach the focused element once per repeat.
+            return skippedRepeat ? false : void 0;
           },
           () => void 0,
         );
