@@ -480,6 +480,28 @@ describe("settings-tab.ts — settings tab", () => {
       tab.display();
       expect(button.classList.contains("mod-cta")).toBe(true);
     });
+
+    it("does not parse unchanged copies again on every change in the tab", () => {
+      // Each change in a settings field redraws the tab. A vault synced with
+      // an older version collects one copy per start of that version.
+      const recovery = Object.fromEntries(
+          Array.from({ length: 50 }, (_0, index) => [
+            `settings.2026-10-${String(10 + (index % 20))}T08:${String(10 + index)}:00.000Z`,
+            older,
+          ]),
+        ),
+        counted = vi.fn(fixer);
+      Object.assign(mockLocalSettings, { value: { recovery } });
+      const tab = new AllSettingsTab(mockContext);
+      tab.drawAllSettings(counted);
+      expect(counted).toHaveBeenCalledTimes(50);
+
+      for (let change = 0; change < 10; change += 1) {
+        tab.display();
+      }
+
+      expect(counted).toHaveBeenCalledTimes(50);
+    });
   });
 
   describe("edge cases and type safety", () => {
