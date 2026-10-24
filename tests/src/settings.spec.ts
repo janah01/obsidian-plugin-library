@@ -1,6 +1,7 @@
 /**
  * Comprehensive tests for src/settings.ts — settings management
  */
+import type { Command } from "obsidian";
 import type { DeepWritable } from "ts-essentials";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Fixer } from "../../src/fixers.js";
@@ -584,6 +585,52 @@ describe("settings.ts — settings management", () => {
       registerSettingsCommands(mockContext);
 
       expect(mockContext.language.value.t).toHaveBeenCalled();
+    });
+
+    it("exports the settings to the current file, which imports them back", async () => {
+      const commands = new Map<string, Command>(),
+        file = { extension: "md" },
+        properties: Record<string, unknown> = {},
+        cache: { frontmatter?: Record<string, unknown> } = {},
+        settings = {
+          read: vi.fn(async (_reader: () => unknown) => {}),
+          value: { language: "en", list: [{ key: "p" }], noticeTimeout: 5 },
+          write: vi.fn(async () => {}),
+        },
+        context = {
+          ...mockContext,
+          addCommand(command: Command): Command {
+            commands.set(command.id, command);
+            return command;
+          },
+          app: {
+            fileManager: {
+              processFrontMatter(
+                _file: unknown,
+                fn: (frontmatter: object) => void,
+              ): Promise<void> {
+                fn(properties);
+                return Promise.resolve();
+              },
+            },
+            lastEvent: null,
+            metadataCache: { getFileCache: () => cache },
+            workspace: { getActiveFile: () => file },
+          },
+          settings,
+        } as unknown as PluginContext;
+      registerSettingsCommands(context);
+
+      commands.get("export-settings.current-file")?.checkCallback?.(false);
+      expect(properties).toStrictEqual(settings.value);
+
+      cache.frontmatter = { ...properties, position: {} };
+      commands.get("import-settings.current-file")?.checkCallback?.(false);
+      await vi.waitFor(() => {
+        expect(settings.read).toHaveBeenCalledOnce();
+      });
+      const [reader] = settings.read.mock.calls[0] ?? [];
+      expect(await reader?.()).toStrictEqual(settings.value);
     });
   });
 

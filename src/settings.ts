@@ -27,6 +27,7 @@ import {
   anyToError,
   asyncDebounce,
   clearProperties,
+  cloneAsWritable,
   copyOnWriteAsync,
   deepFreeze,
   lazyInit,
@@ -339,7 +340,7 @@ export function registerSettingsCommands(context: PluginContext): void {
                   throw new Error(i18n.t("errors.retry-outdated-frontmatter"));
                 }
                 clearProperties(fm);
-                Object.assign(fm, context.settings);
+                Object.assign(fm, cloneAsWritable(settings.value));
               })
               .catch((error: unknown) => {
                 printError(
