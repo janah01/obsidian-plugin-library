@@ -31,7 +31,8 @@ export interface ComponentAction<C, V> {
  * Links a component to a setting. Writes the current value on every call,
  * except into a focused number field whose text is not a number yet or already
  * stands for that number. A change typed while a number field reports bad
- * input, such as `14.` or `1e`, stores nothing.
+ * input, such as `14.` or `1e`, stores nothing, and the field shows the stored
+ * value again when it loses focus.
  */
 export function linkSetting<
   V,
@@ -78,8 +79,27 @@ export function linkSetting<
     if (post) {
       post(component, activate);
     }
+    const input = numberInput(component);
+    if (input) {
+      if (!NUMBER_FIELD_LEAVERS.has(input)) {
+        input.addEventListener("blur", () => {
+          NUMBER_FIELD_LEAVERS.get(input)?.();
+        });
+      }
+      // The binder runs again on every refresh, so the latest getter wins.
+      NUMBER_FIELD_LEAVERS.set(input, () => {
+        if (input.validity.badInput) {
+          write(getter());
+        }
+      });
+    }
   };
 }
+
+// What each number field bound by `linkSetting` does when it loses focus: a
+// draft that is not a number stored nothing, so it gives way to the stored
+// value.
+const NUMBER_FIELD_LEAVERS = new WeakMap<HTMLInputElement, () => void>();
 
 function numberInput(component: unknown): HTMLInputElement | null {
   if (

@@ -782,6 +782,77 @@ describe("settings-widgets.ts — widget utilities", () => {
         expect(field.text()).toBe("0400");
       });
 
+      it.each([
+        { draft: "deleting the 5 of 14.5", start: "14.5", erase: 1, keys: "" },
+        {
+          draft: "a plus sign typed before 5",
+          start: "7",
+          erase: 0,
+          keys: "+5",
+        },
+      ])(
+        "shows the stored number once the field is left after $draft",
+        async ({ start, erase, keys }) => {
+          const data = { size: Number(start) },
+            field = numberField("macOS/Windows", start),
+            other = document.body.appendChild(document.createElement("input"));
+          bindRefreshing(field.component, (refresh) =>
+            linkSetting(
+              () => data.size.toString(),
+              setTextToNumber<TestComponent>((value) => {
+                data.size = value;
+              }),
+              refresh,
+            ),
+          );
+          await field.erase(erase);
+          await field.type(keys, keys !== "");
+          // Chromium sends `change` and then moves the focus as the user leaves.
+          field.inputEl.dispatchEvent(new Event("change"));
+          other.focus();
+
+          // The text left in the field must stand for the number stored.
+          expect(Number(field.text())).toBe(data.size);
+        },
+      );
+
+      it("shows what the latest binding reads once the field is left", async () => {
+        const field = numberField("macOS/Windows", "7"),
+          other = document.body.appendChild(document.createElement("input"));
+        linkSetting(() => "7", vi.fn(), vi.fn())(field.component);
+        // A refresh binds the field again, to a getter of its own.
+        linkSetting(() => "9", vi.fn(), vi.fn())(field.component);
+        await field.type("1e", true);
+        other.focus();
+
+        expect(field.setValue).toHaveBeenLastCalledWith("9");
+        expect(field.text()).toBe("9");
+      });
+
+      it("keeps a draft while only the window loses focus", async () => {
+        const field = numberField("macOS/Windows", "7");
+        linkSetting(() => "7", vi.fn(), vi.fn())(field.component);
+        await field.type("1e", true);
+        // Switching to another app blurs the field, which stays focused.
+        field.inputEl.dispatchEvent(new FocusEvent("blur"));
+
+        expect(document.activeElement).toBe(field.inputEl);
+        expect(field.text()).toBe("1e");
+      });
+
+      it("keeps a draft that is a number when the field is left", async () => {
+        const field = numberField("macOS/Windows", "400"),
+          other = document.body.appendChild(document.createElement("input"));
+        linkSetting(() => "400", vi.fn(), vi.fn())(field.component);
+        field.setValue.mockClear();
+        await field.type("0400", true);
+        other.focus();
+
+        // Only a draft that stored nothing gives way; the next refresh shows 400.
+        expect(field.setValue).not.toHaveBeenCalled();
+        expect(field.text()).toBe("0400");
+      });
+
       it("recognises a focused number field made by another window", () => {
         // A pop-out window has its own element classes, so `instanceof` with
         // this window's `HTMLInputElement` is false for its inputs.
@@ -793,7 +864,9 @@ describe("settings-widgets.ts — widget utilities", () => {
               activeElement: null,
               defaultView: { HTMLInputElement: OtherWindowInput },
             },
+          addEventListener = vi.fn(),
           inputEl = Object.assign(new OtherWindowInput(), {
+            addEventListener,
             ownerDocument,
             type: "number",
             validity: { badInput: false },
@@ -814,6 +887,10 @@ describe("settings-widgets.ts — widget utilities", () => {
 
         expect(inputEl instanceof HTMLInputElement).toBe(false);
         expect(setValue.mock.calls).toEqual([["400"]]);
+        // Bound twice, it is handled as one number field when it is left.
+        expect(addEventListener.mock.calls).toEqual([
+          ["blur", expect.any(Function)],
+        ]);
       });
 
       it("never reads the text, so a decimal comma read as a number stays", async () => {
