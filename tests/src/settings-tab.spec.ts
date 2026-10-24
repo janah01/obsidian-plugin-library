@@ -440,6 +440,46 @@ describe("settings-tab.ts — settings tab", () => {
         }).classList.contains("mod-cta"),
       ).toBe(false);
     });
+
+    it("follows the copies each time the tab is drawn again", () => {
+      const malformed = JSON.stringify({ language: "", noticeTimeout: "5" });
+      Object.assign(mockLocalSettings, {
+        value: {
+          recovery: {
+            "settings.2026-10-14T08:32:47.171Z": older,
+            "settings.2026-10-14T09:00:00.000Z": malformed,
+          },
+        },
+      });
+      const tab = new AllSettingsTab(mockContext);
+      tab.drawAllSettings(fixer);
+      const button = tab.containerEl.querySelector<HTMLButtonElement>(
+        'button[aria-label="translated-settings.all-settings-actions.recover"]',
+      );
+      if (!button) {
+        throw new Error("the Recover button was not drawn");
+      }
+      expect(button.classList.contains("mod-cta")).toBe(true);
+
+      // The Recover dialog removed the malformed copy.
+      Object.assign(mockLocalSettings, {
+        value: { recovery: { "settings.2026-10-14T08:32:47.171Z": older } },
+      });
+      tab.display();
+      expect(button.classList.contains("mod-cta")).toBe(false);
+
+      // A later start kept another malformed copy.
+      Object.assign(mockLocalSettings, {
+        value: {
+          recovery: {
+            "settings.2026-10-14T08:32:47.171Z": older,
+            "settings.2026-10-15T09:00:00.000Z": malformed,
+          },
+        },
+      });
+      tab.display();
+      expect(button.classList.contains("mod-cta")).toBe(true);
+    });
   });
 
   describe("edge cases and type safety", () => {
