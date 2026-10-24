@@ -340,6 +340,22 @@ describe("settings-widgets.ts — widget utilities", () => {
               await handler?.(inputEl.value);
             }
           },
+          // Presses Backspace `count` times, as a held key repeats it.
+          async erase(count: number): Promise<void> {
+            inputEl.focus();
+            for (const _ of Array.from({ length: count })) {
+              text = `${text.slice(0, caret - 1)}${text.slice(caret)}`;
+              caret -= 1;
+              await handler?.(inputEl.value);
+            }
+          },
+          // Selects the text and deletes it with one key.
+          async clear(): Promise<void> {
+            inputEl.focus();
+            text = "";
+            caret = 0;
+            await handler?.(inputEl.value);
+          },
         };
       }
 
@@ -411,6 +427,32 @@ describe("settings-widgets.ts — widget utilities", () => {
         );
         await field.type(keys, replaceAll);
         return { stored: data.timeout, text: field.text() };
+      }
+
+      // The row of `typeFontSize`, bound, for tests that do more than type.
+      function bindFontSize(platform: Platform, start: number) {
+        const data: { fontSize?: number } = { fontSize: start },
+          field = numberField(platform, start.toString());
+        bindRefreshing(field.component, (refresh) =>
+          linkSetting(
+            () => data.fontSize?.toString() ?? "",
+            composeSetters<string, TestComponent>(
+              (value) => {
+                if (value) {
+                  return false;
+                }
+                delete data.fontSize;
+                return true;
+              },
+              setTextToNumber((value) => {
+                data.fontSize = value;
+              }),
+            ),
+            refresh,
+          ),
+        );
+        field.setValue.mockClear();
+        return { data, field };
       }
 
       afterEach(() => {
@@ -486,6 +528,73 @@ describe("settings-widgets.ts — widget utilities", () => {
             stored: 0,
             text: "0",
           });
+        });
+
+        it("keeps a zero typed after the decimal point", async () => {
+          expect(await typeFontSize(platform, 14, ".05")).toEqual({
+            stored: 14.05,
+            text: "14.05",
+          });
+        });
+
+        it("takes a number that starts with its decimal point", async () => {
+          expect(await typeFontSize(platform, undefined, ".5")).toEqual({
+            stored: 0.5,
+            text: ".5",
+          });
+        });
+
+        it("stores a negative exponent typed after a timeout of 1", async () => {
+          expect(await typeTimeout(platform, 1, "e-3")).toEqual({
+            stored: 0.001,
+            text: "1e-3",
+          });
+        });
+
+        it("takes a negative fraction typed over a selected number", async () => {
+          expect(await typeTimeout(platform, 5, "-.5", true)).toEqual({
+            stored: -0.5,
+            text: "-.5",
+          });
+        });
+
+        it("follows a held Backspace down to an unset font size", async () => {
+          const { data, field } = bindFontSize(platform, 14.5);
+
+          await field.erase(4);
+
+          expect(data).toEqual({});
+          expect(field.text()).toBe("");
+          expect(field.setValue).not.toHaveBeenCalled();
+        });
+
+        it("keeps an emptied timeout empty and takes the next digit", async () => {
+          const data = { timeout: 5 },
+            field = numberField(platform, "5");
+          bindRefreshing(field.component, (refresh) =>
+            linkSetting(
+              () => data.timeout.toString(),
+              setTextToNumber<TestComponent>((value) => {
+                data.timeout = value;
+              }),
+              refresh,
+            ),
+          );
+          field.setValue.mockClear();
+
+          await field.clear();
+          // An empty timeout still means 0, as before; the field stays empty.
+          expect({ stored: data.timeout, text: field.text() }).toEqual({
+            stored: 0,
+            text: "",
+          });
+          await field.type("7");
+
+          expect({ stored: data.timeout, text: field.text() }).toEqual({
+            stored: 7,
+            text: "7",
+          });
+          expect(field.setValue).not.toHaveBeenCalled();
         });
       });
 
@@ -671,6 +780,117 @@ describe("settings-widgets.ts — widget utilities", () => {
         expect(document.activeElement).not.toBe(field.inputEl);
         expect(field.setValue).not.toHaveBeenCalled();
         expect(field.text()).toBe("0400");
+      });
+
+      it("recognises a focused number field made by another window", () => {
+        // A pop-out window has its own element classes, so `instanceof` with
+        // this window's `HTMLInputElement` is false for its inputs.
+        class OtherWindowInput {
+          public readonly tagName = "INPUT";
+        }
+        const ownerDocument: { activeElement: unknown; defaultView: unknown } =
+            {
+              activeElement: null,
+              defaultView: { HTMLInputElement: OtherWindowInput },
+            },
+          inputEl = Object.assign(new OtherWindowInput(), {
+            ownerDocument,
+            type: "number",
+            validity: { badInput: false },
+            value: "0400",
+          }),
+          setValue = vi.fn(),
+          component = {
+            inputEl,
+            onChange: (): unknown => component,
+            setValue,
+          } as unknown as TestComponent,
+          bind = linkSetting(() => "400", vi.fn(), vi.fn());
+        bind(component);
+        expect(setValue.mock.calls).toEqual([["400"]]);
+        ownerDocument.activeElement = inputEl;
+
+        bind(component);
+
+        expect(inputEl instanceof HTMLInputElement).toBe(false);
+        expect(setValue.mock.calls).toEqual([["400"]]);
+      });
+
+      it("never reads the text, so a decimal comma read as a number stays", async () => {
+        // Chromium with a German locale reports `14,5` as 14.5 and `14,` as
+        // bad input; the field keeps showing the comma.
+        const data = { size: 14 },
+          field = numberField("macOS/Windows", "14"),
+          shown = Object.getOwnPropertyDescriptor(field.inputEl, "value"),
+          reported = (): { readonly badInput: boolean; value: string } => {
+            const text = field.text();
+            if (/^\d+(?:,\d+)?$/u.test(text)) {
+              return { badInput: false, value: text.replace(",", ".") };
+            }
+            return { badInput: true, value: "" };
+          };
+        Object.defineProperty(field.inputEl, "value", {
+          configurable: true,
+          get: () => reported().value,
+          set: (value: string): void => {
+            shown?.set?.call(field.inputEl, value);
+          },
+        });
+        Object.defineProperty(field.inputEl, "validity", {
+          configurable: true,
+          get: () => ({ badInput: reported().badInput }),
+        });
+        bindRefreshing(field.component, (refresh) =>
+          linkSetting(
+            () => data.size.toString(),
+            setTextToNumber<TestComponent>((value) => {
+              data.size = value;
+            }),
+            refresh,
+          ),
+        );
+        field.setValue.mockClear();
+
+        await field.type(",5");
+
+        expect({ stored: data.size, text: field.text() }).toEqual({
+          stored: 14.5,
+          text: "14,5",
+        });
+        expect(field.setValue).not.toHaveBeenCalled();
+      });
+
+      it("writes nothing when storing fails and stores the next key", async () => {
+        const data = { timeout: 1 },
+          field = numberField("macOS/Windows", "1"),
+          store = vi
+            .fn((value: number) => {
+              data.timeout = value;
+            })
+            .mockImplementationOnce(() => {
+              throw new Error("write failed");
+            });
+        bindRefreshing(field.component, (refresh) =>
+          linkSetting(
+            () => data.timeout.toString(),
+            setTextToNumber<TestComponent>(store),
+            refresh,
+          ),
+        );
+        field.setValue.mockClear();
+
+        await expect(field.type("2")).rejects.toThrow("write failed");
+        expect({ stored: data.timeout, text: field.text() }).toEqual({
+          stored: 1,
+          text: "12",
+        });
+        await field.type("3");
+
+        expect({ stored: data.timeout, text: field.text() }).toEqual({
+          stored: 123,
+          text: "123",
+        });
+        expect(field.setValue).not.toHaveBeenCalled();
       });
     });
   });
