@@ -634,7 +634,7 @@ describe("obsidian.ts — Obsidian API utilities", () => {
       ]);
     });
 
-    it("writes only the current value to a focused number input", async () => {
+    it("writes nothing to a focused number input that already shows the stored number", async () => {
       const ui = new UpdatableUI();
       const state = { stored: "5" };
       const input = linkedInput(ui, state);
@@ -648,7 +648,7 @@ describe("obsidian.ts — Obsidian API utilities", () => {
       await vi.runAllTimersAsync();
 
       expect(state.stored).toBe("15");
-      expect(write.mock.calls).toEqual([["15"]]);
+      expect(write.mock.calls).toEqual([]);
     });
 
     it("shows a value changed elsewhere in a focused field", () => {
@@ -661,6 +661,19 @@ describe("obsidian.ts — Obsidian API utilities", () => {
       ui.update();
 
       expect(input.value).toBe("python");
+    });
+
+    it("shows a different number changed elsewhere in a focused number input", () => {
+      const ui = new UpdatableUI();
+      const state = { stored: "5" };
+      const input = linkedInput(ui, state);
+      input.type = "number";
+      input.focus();
+      state.stored = "7";
+
+      ui.update();
+
+      expect(input.value).toBe("7");
     });
 
     it("still resets a field the user is not editing", () => {
