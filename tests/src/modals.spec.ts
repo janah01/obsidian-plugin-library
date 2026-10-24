@@ -13,6 +13,7 @@ import {
 } from "vitest";
 import { type Fixer, markFixed } from "../../src/fixers.js";
 import type { LanguageManager } from "../../src/i18n.js";
+import { DOMClasses } from "../../src/magic.js";
 import {
   EditDataModal,
   getDefaultSuggestModalInstructions,
@@ -577,6 +578,7 @@ describe("modals.ts — modal dialogs", () => {
     function open(callback: (data: Data) => unknown): {
       readonly importButton: HTMLButtonElement;
       readonly textArea: HTMLTextAreaElement;
+      readonly warning: Element;
     } {
       const modal = new EditDataModal(mockContext, { a: 2, b: 3 }, fixer, {
           callback,
@@ -586,11 +588,12 @@ describe("modals.ts — modal dialogs", () => {
       const importButton = contentEl.querySelector<HTMLButtonElement>(
           'button[aria-label="translated-components.edit-data.import-from-clipboard"]',
         ),
-        textArea = contentEl.querySelector("textarea");
-      if (!importButton || !textArea) {
+        textArea = contentEl.querySelector("textarea"),
+        warning = contentEl.querySelector(`.${DOMClasses.MOD_WARNING}`);
+      if (!importButton || !textArea || !warning) {
         throw new Error("EditDataModal did not draw its fields");
       }
-      return { importButton, textArea };
+      return { importButton, textArea, warning };
     }
 
     async function type(
@@ -719,6 +722,19 @@ describe("modals.ts — modal dialogs", () => {
           message: "translated-errors.malformed-data",
         }),
       );
+    });
+
+    it("says why it refused data in its warning line", async () => {
+      const { importButton, textArea, warning } = open(vi.fn());
+
+      await importText(importButton, '{ "a": "5" }');
+      expect(warning.textContent).toBe("translated-errors.malformed-data");
+
+      await type(textArea, '{ "a": 5, "b": 3 }');
+      expect(warning.textContent).toBe("");
+
+      await type(textArea, '{ "a": "5", "b": 3 }');
+      expect(warning.textContent).toBe("translated-errors.malformed-data");
     });
 
     it("refuses to import data with an unknown key or of another shape", async () => {
