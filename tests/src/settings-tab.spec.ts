@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { AdvancedSettingTab } from "../../src/settings-tab.js";
+import { EditDataModal } from "../../src/modals.js";
 import { type Fixer, markFixed } from "../../src/fixers.js";
 import type { PluginContext } from "../../src/plugin.js";
 import type { LanguageManager } from "../../src/i18n.js";
@@ -501,6 +502,72 @@ describe("settings-tab.ts — settings tab", () => {
       }
 
       expect(counted).toHaveBeenCalledTimes(50);
+    });
+  });
+
+  describe("Edit button", () => {
+    class AllSettingsTab extends AdvancedSettingTab<PluginContext.Settings> {
+      protected snapshot0(): Partial<PluginContext.Settings> {
+        return {};
+      }
+
+      public drawAllSettings(fixer: Fixer<PluginContext.Settings>): void {
+        this.newAllSettingsWidget({}, fixer);
+      }
+    }
+
+    // Fills a missing or mistyped key with its default.
+    const fixer: Fixer<PluginContext.Settings> = (data) => {
+      const unc = launderUnchecked<PluginContext.Settings>(data);
+      return markFixed(data, {
+        errorNoticeTimeout:
+          typeof unc.errorNoticeTimeout === "number"
+            ? unc.errorNoticeTimeout
+            : 10,
+        language: typeof unc.language === "string" ? unc.language : "",
+        noticeTimeout:
+          typeof unc.noticeTimeout === "number" ? unc.noticeTimeout : 5,
+      });
+    };
+
+    it("reads imported data in through the settings manager", async () => {
+      // A plugin's manager may read data by rules of its own, such as for a
+      // key the data lacks; Reload and the Import commands go through them.
+      const imported = {
+          errorNoticeTimeout: 10,
+          language: "fr",
+          noticeTimeout: 5,
+        },
+        read = vi.fn(async (reader: () => unknown) => {
+          await reader();
+        });
+      Object.assign(mockSettings, { read, write: vi.fn(async () => {}) });
+      // Records each dialog that opens and lets it draw.
+      const opened = vi.spyOn(EditDataModal.prototype, "onOpen"),
+        tab = new AllSettingsTab(mockContext);
+      tab.drawAllSettings(fixer);
+      tab.containerEl
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="translated-settings.all-settings-actions.edit"]',
+        )
+        ?.click();
+      vi.spyOn(navigator.clipboard, "readText").mockResolvedValue(
+        JSON.stringify(imported),
+      );
+      const [dialog] = opened.mock.contexts as EditDataModal<object>[];
+      dialog?.contentEl
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="translated-components.edit-data.import-from-clipboard"]',
+        )
+        ?.click();
+
+      await vi.waitFor(() => {
+        expect(read).toHaveBeenCalledOnce();
+      });
+      const [reader] = read.mock.calls[0] ?? [];
+      expect(await reader?.()).toStrictEqual(imported);
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- expect() does not call the method, only references it
+      expect(mockSettings.mutate).not.toHaveBeenCalled();
     });
   });
 
