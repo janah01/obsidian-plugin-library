@@ -691,6 +691,46 @@ describe("modals.ts — modal dialogs", () => {
         }),
       );
     });
+
+    it("refuses to import data with an unknown key or of another shape", async () => {
+      const callback = vi.fn(),
+        { importButton } = open(callback);
+
+      for (const text of ['{ "a": 5, "z": 1 }', "[]", "null", '"a"', "5"]) {
+        await importText(importButton, text);
+      }
+
+      expect(callback).not.toHaveBeenCalled();
+      expect(shownErrors).toHaveBeenCalledTimes(5);
+    });
+
+    it("gets back the data it opened with after an import, through reset", async () => {
+      const callback = vi.fn(),
+        modal = new EditDataModal(mockContext, { a: 2, b: 3 }, fixer, {
+          callback,
+        });
+      modal.open();
+      function button(label: string): HTMLButtonElement {
+        const ret = modal.contentEl.querySelector<HTMLButtonElement>(
+          `button[aria-label="translated-components.edit-data.${label}"]`,
+        );
+        if (!ret) {
+          throw new Error(`EditDataModal did not draw ${label}`);
+        }
+        return ret;
+      }
+
+      await importText(button("import-from-clipboard"), "{}");
+      expect(callback).toHaveBeenLastCalledWith({ a: 1, b: 1 });
+
+      button("reset").click();
+      await tick();
+
+      expect(callback).toHaveBeenLastCalledWith({ a: 2, b: 3 });
+      expect(modal.contentEl.querySelector("textarea")?.value).toBe(
+        JSON.stringify({ a: 2, b: 3 }, null, 2),
+      );
+    });
   });
 
   describe("type safety", () => {
