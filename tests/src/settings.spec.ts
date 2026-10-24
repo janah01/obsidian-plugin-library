@@ -303,7 +303,7 @@ describe("settings.ts — settings management", () => {
         consoleWarn = vi.spyOn(console, "warn").mockImplementation(noop),
         manager = new StorageSettingsManager(context, fixer, mockStorage);
       vi.spyOn(console, "debug").mockImplementation(noop);
-      vi.spyOn(console, "error").mockImplementation(noop);
+      const consoleError = vi.spyOn(console, "error").mockImplementation(noop);
 
       manager.load();
       await manager.onLoaded;
@@ -314,6 +314,9 @@ describe("settings.ts — settings management", () => {
       );
       expect(StorageSettingsManager.hasFailed(manager.value)).toBe(true);
       expect(manager.value.count).toBe(0);
+      // Nothing was read, so nothing is reported as malformed or kept.
+      expect(consoleError).not.toHaveBeenCalled();
+      expect(manager.value.recovery).toEqual({});
     });
 
     it("loads settings from storage", async () => {
