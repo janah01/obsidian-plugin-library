@@ -27,6 +27,12 @@ export interface ComponentAction<C, V> {
   ) => void;
 }
 
+/**
+ * Links a component to a setting. Writes the current value on every call,
+ * except into a focused number field whose text is not a number yet or already
+ * stands for that number. A change typed while a number field reports bad
+ * input, such as `14.` or `1e`, stores nothing.
+ */
 export function linkSetting<
   V,
   C extends ValueComponent<V> & {
@@ -42,19 +48,51 @@ export function linkSetting<
     if (pre) {
       pre(component);
     }
+    const write = (value: V): void => {
+      const input = numberInput(component);
+      if (
+        input &&
+        input === input.ownerDocument.activeElement &&
+        (input.validity.badInput ||
+          (typeof value === "string" && Number(input.value) === Number(value)))
+      ) {
+        return;
+      }
+      component.setValue(value);
+    };
     const activate = async (value: V): Promise<void> => {
       const ret = await setter(value, component, getter);
       if (typeof ret === "boolean" && !ret) {
-        component.setValue(getter());
+        write(getter());
         return;
       }
       await callback(value, component, getter);
     };
-    component.setValue(getter()).onChange(activate);
+    write(getter());
+    component.onChange(async (value) => {
+      if (numberInput(component)?.validity.badInput) {
+        return;
+      }
+      await activate(value);
+    });
     if (post) {
       post(component, activate);
     }
   };
+}
+
+function numberInput(component: unknown): HTMLInputElement | null {
+  if (
+    typeof component !== "object" ||
+    component === null ||
+    !("inputEl" in component)
+  ) {
+    return null;
+  }
+  const { inputEl } = component;
+  return instanceOf(inputEl, HTMLInputElement) && inputEl.type === "number"
+    ? inputEl
+    : null;
 }
 
 export function composeSetters<V, C extends ValueComponent<V>>(

@@ -261,6 +261,418 @@ describe("settings-widgets.ts — widget utilities", () => {
       expect(setter).toHaveBeenCalled();
       expect(callback).toHaveBeenCalled();
     });
+
+    describe("a focused number field", () => {
+      // An `<input type="number">` as Chromium reported it in Obsidian 1.14.4.
+      // On macOS and Windows a text that is not a number yet, such as `14.`,
+      // reads as "" with `validity.badInput`; on Ubuntu `14.` reads as "14".
+      // Keys insert at the caret. Writing a different text moves the caret to
+      // the end (macOS, Windows) or to the start (Ubuntu).
+      const PLATFORMS = ["macOS/Windows", "Ubuntu"] as const;
+      type Platform = (typeof PLATFORMS)[number];
+      const FLOAT = /^-?(?:\d+|\d*\.\d+)(?:[eE][-+]?\d+)?$/u;
+
+      function numberField(
+        platform: Platform,
+        initial: string,
+        parent: HTMLElement = document.body,
+      ) {
+        const inputEl = parent.ownerDocument.createElement("input");
+        inputEl.type = "number";
+        parent.append(inputEl);
+        let text = initial,
+          caret = initial.length,
+          handler: ((value: string) => unknown) | undefined;
+        const reported = (): { readonly badInput: boolean; value: string } => {
+          if (text === "" || FLOAT.test(text)) {
+            return { badInput: false, value: text };
+          }
+          if (platform === "Ubuntu" && /^-?\d+\.$/u.test(text)) {
+            return { badInput: false, value: text.slice(0, -1) };
+          }
+          return { badInput: true, value: "" };
+        };
+        Object.defineProperty(inputEl, "value", {
+          configurable: true,
+          get: () => reported().value,
+          set: (value: string) => {
+            if (value !== text) {
+              text = value;
+              caret = platform === "Ubuntu" ? 0 : value.length;
+            }
+          },
+        });
+        Object.defineProperty(inputEl, "validity", {
+          configurable: true,
+          get: () => ({ badInput: reported().badInput }),
+        });
+        const setValue = vi.fn((value: string) => {
+            inputEl.value = value;
+          }),
+          component = {
+            getValue: (): string => inputEl.value,
+            inputEl,
+            onChange(callback: (value: string) => unknown): unknown {
+              handler = callback;
+              return component;
+            },
+            setValue(value: string): unknown {
+              setValue(value);
+              return component;
+            },
+          } as unknown as TestComponent;
+        return {
+          component,
+          inputEl,
+          setValue,
+          text: (): string => text,
+          // Types `keys` one after the other; `replaceAll` selects the text first.
+          async type(keys: string, replaceAll = false): Promise<void> {
+            inputEl.focus();
+            if (replaceAll) {
+              text = "";
+              caret = 0;
+            }
+            for (const key of keys) {
+              text = `${text.slice(0, caret)}${key}${text.slice(caret)}`;
+              caret += 1;
+              // One key after the other, as a keyboard types them.
+              await handler?.(inputEl.value);
+            }
+          },
+        };
+      }
+
+      // Binds like `UpdatableUI.newSetting` refreshes: every accepted change
+      // runs the binder again on the same component.
+      function bindRefreshing(
+        component: TestComponent,
+        link: (refresh: () => void) => (component: TestComponent) => void,
+      ): void {
+        const bind = link(() => {
+          bind(component);
+        });
+        bind(component);
+      }
+
+      // The Font size row of a plugin: empty unsets it, else a number.
+      async function typeFontSize(
+        platform: Platform,
+        start: number | undefined,
+        keys: string,
+      ): Promise<{
+        readonly stored: number | undefined;
+        readonly text: string;
+      }> {
+        const data: { fontSize?: number } = {},
+          field = numberField(platform, start?.toString() ?? "");
+        if (start !== undefined) {
+          data.fontSize = start;
+        }
+        bindRefreshing(field.component, (refresh) =>
+          linkSetting(
+            () => data.fontSize?.toString() ?? "",
+            composeSetters<string, TestComponent>(
+              (value) => {
+                if (value) {
+                  return false;
+                }
+                delete data.fontSize;
+                return true;
+              },
+              setTextToNumber((value) => {
+                data.fontSize = value;
+              }),
+            ),
+            refresh,
+          ),
+        );
+        await field.type(keys);
+        return { stored: data.fontSize, text: field.text() };
+      }
+
+      // The Notice timeout row: a required number.
+      async function typeTimeout(
+        platform: Platform,
+        start: number,
+        keys: string,
+        replaceAll = false,
+      ): Promise<{ readonly stored: number; readonly text: string }> {
+        const data = { timeout: start },
+          field = numberField(platform, start.toString());
+        bindRefreshing(field.component, (refresh) =>
+          linkSetting(
+            () => data.timeout.toString(),
+            setTextToNumber<TestComponent>((value) => {
+              data.timeout = value;
+            }),
+            refresh,
+          ),
+        );
+        await field.type(keys, replaceAll);
+        return { stored: data.timeout, text: field.text() };
+      }
+
+      afterEach(() => {
+        document.body.replaceChildren();
+      });
+
+      describe.each(PLATFORMS)("on %s", (platform) => {
+        it("stores 14.5 typed after a font size of 14", async () => {
+          expect(await typeFontSize(platform, 14, ".5")).toEqual({
+            stored: 14.5,
+            text: "14.5",
+          });
+        });
+
+        it("stores 5.5 typed after a timeout of 5", async () => {
+          expect(await typeTimeout(platform, 5, ".5")).toEqual({
+            stored: 5.5,
+            text: "5.5",
+          });
+        });
+
+        it("stores 5.05 typed after a timeout of 5", async () => {
+          expect(await typeTimeout(platform, 5, ".05")).toEqual({
+            stored: 5.05,
+            text: "5.05",
+          });
+        });
+
+        it("stores 1e3 as 1000 and keeps the text", async () => {
+          expect(await typeTimeout(platform, 1, "e3")).toEqual({
+            stored: 1000,
+            text: "1e3",
+          });
+        });
+
+        it("takes a minus sign typed over a selected number", async () => {
+          expect(await typeTimeout(platform, 5, "-1", true)).toEqual({
+            stored: -1,
+            text: "-1",
+          });
+        });
+
+        it("does not rewrite a draft that stands for the stored number", async () => {
+          expect(await typeTimeout(platform, 0, "400")).toEqual({
+            stored: 400,
+            text: "0400",
+          });
+        });
+
+        it("writes the stored number back over a rejected draft", async () => {
+          const data = { count: 1 },
+            field = numberField(platform, "1");
+          bindRefreshing(field.component, (refresh) =>
+            linkSetting(
+              () => data.count.toString(),
+              setTextToNumber<TestComponent>((value) => {
+                data.count = value;
+              }, true),
+              refresh,
+            ),
+          );
+          field.setValue.mockClear();
+
+          await field.type(".5");
+
+          expect(data.count).toBe(1);
+          expect(field.setValue.mock.calls).toEqual([["1"]]);
+          expect(field.text()).toBe("1");
+        });
+
+        it("stores 0 typed into an empty field without writing it back", async () => {
+          expect(await typeFontSize(platform, undefined, "0")).toEqual({
+            stored: 0,
+            text: "0",
+          });
+        });
+      });
+
+      it("stores nothing and writes nothing while the field reports bad input", async () => {
+        const setter = vi.fn(() => true),
+          callback = vi.fn(),
+          field = numberField("macOS/Windows", "14");
+        linkSetting(() => "14", setter, callback)(field.component);
+        field.setValue.mockClear();
+
+        await field.type(".");
+
+        expect(field.inputEl.validity.badInput).toBe(true);
+        expect(setter).not.toHaveBeenCalled();
+        expect(callback).not.toHaveBeenCalled();
+        expect(field.setValue).not.toHaveBeenCalled();
+        expect(field.text()).toBe("14.");
+      });
+
+      it("still stores a value that post activates while the field shows a bad draft", async () => {
+        const data = { size: 14 },
+          field = numberField("macOS/Windows", "14");
+        let activate: ((value: string) => PromiseLike<void>) | undefined;
+        linkSetting(
+          () => data.size.toString(),
+          setTextToNumber<TestComponent>((value) => {
+            data.size = value;
+          }),
+          vi.fn(),
+          {
+            post(_component, activate0) {
+              activate = activate0;
+            },
+          },
+        )(field.component);
+        await field.type(".");
+
+        await activate?.("20");
+
+        expect(field.inputEl.validity.badInput).toBe(true);
+        expect(data.size).toBe(20);
+      });
+
+      it("keeps a draft that is not a number yet when the field refreshes", async () => {
+        const data = { size: 14 },
+          field = numberField("macOS/Windows", "14"),
+          bind = linkSetting(
+            () => data.size.toString(),
+            setTextToNumber<TestComponent>((value) => {
+              data.size = value;
+            }),
+            vi.fn(),
+          );
+        bind(field.component);
+        await field.type(".");
+        field.setValue.mockClear();
+        data.size = 20;
+
+        bind(field.component);
+
+        expect(field.setValue).not.toHaveBeenCalled();
+        expect(field.text()).toBe("14.");
+      });
+
+      it("writes a different number stored elsewhere into the focused field", () => {
+        const data = { size: 14 },
+          field = numberField("Ubuntu", "14"),
+          bind = linkSetting(() => data.size.toString(), vi.fn(), vi.fn());
+        field.inputEl.focus();
+        bind(field.component);
+        field.setValue.mockClear();
+        data.size = 20;
+
+        bind(field.component);
+
+        expect(field.setValue.mock.calls).toEqual([["20"]]);
+        expect(field.text()).toBe("20");
+      });
+
+      it("writes the first draw before post makes the field a number field", () => {
+        const field = numberField("macOS/Windows", "0400");
+        field.inputEl.type = "text";
+        field.inputEl.focus();
+
+        linkSetting(() => "400", vi.fn(), vi.fn(), {
+          post() {
+            field.inputEl.type = "number";
+          },
+        })(field.component);
+
+        expect(field.setValue.mock.calls).toEqual([["400"]]);
+        expect(field.inputEl.type).toBe("number");
+        expect(field.text()).toBe("400");
+      });
+
+      it("skips the write on a refresh once post made it a number field", async () => {
+        const data = { timeout: 0 },
+          field = numberField("macOS/Windows", "0");
+        field.inputEl.type = "text";
+        bindRefreshing(field.component, (refresh) =>
+          linkSetting(
+            () => data.timeout.toString(),
+            setTextToNumber<TestComponent>((value) => {
+              data.timeout = value;
+            }),
+            refresh,
+            {
+              post() {
+                field.inputEl.type = "number";
+              },
+            },
+          ),
+        );
+        field.setValue.mockClear();
+
+        await field.type("400");
+
+        expect(data.timeout).toBe(400);
+        expect(field.setValue).not.toHaveBeenCalled();
+        expect(field.text()).toBe("0400");
+      });
+
+      it("writes the stored number into an unfocused field with a draft", () => {
+        const field = numberField("macOS/Windows", "14.");
+
+        linkSetting(() => "14", vi.fn(), vi.fn())(field.component);
+
+        expect(field.setValue.mock.calls).toEqual([["14"]]);
+        expect(field.text()).toBe("14");
+      });
+
+      it("writes the stored value back into a focused text field on reject", async () => {
+        const inputEl = document.body.appendChild(
+            document.createElement("input"),
+          ),
+          setValue = vi.fn((value: string) => {
+            inputEl.value = value;
+          });
+        let handler: ((value: string) => unknown) | undefined;
+        const component = {
+          inputEl,
+          onChange(callback: (value: string) => unknown): unknown {
+            handler = callback;
+            return component;
+          },
+          setValue(value: string): unknown {
+            setValue(value);
+            return component;
+          },
+        } as unknown as TestComponent;
+        linkSetting(
+          () => "400",
+          vi.fn(() => false),
+          vi.fn(),
+        )(component);
+        inputEl.focus();
+        inputEl.value = "0400";
+        setValue.mockClear();
+
+        await handler?.(inputEl.value);
+
+        expect(setValue.mock.calls).toEqual([["400"]]);
+        expect(inputEl.value).toBe("400");
+      });
+
+      it("skips the write into a number field focused in another document", () => {
+        const frame = document.body.appendChild(
+            document.createElement("iframe"),
+          ),
+          { contentDocument } = frame;
+        if (!contentDocument) throw new Error("iframe has no document");
+        const field = numberField(
+          "macOS/Windows",
+          "0400",
+          contentDocument.body,
+        );
+        field.inputEl.focus();
+
+        linkSetting(() => "400", vi.fn(), vi.fn())(field.component);
+
+        // As in a pop-out window, the global document does not see this focus.
+        expect(contentDocument.activeElement).toBe(field.inputEl);
+        expect(document.activeElement).not.toBe(field.inputEl);
+        expect(field.setValue).not.toHaveBeenCalled();
+        expect(field.text()).toBe("0400");
+      });
+    });
   });
 
   describe("composeSetters", () => {
