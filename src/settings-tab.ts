@@ -209,9 +209,9 @@ export abstract class AdvancedSettingTab<
             .onClick(() => {
               new EditDataModal(context, settings.value, fixer, {
                 callback: async (settings0): Promise<void> => {
-                  await settings.mutate((settingsM) => {
-                    Object.assign(settingsM, settings0);
-                  });
+                  // As Reload does, so that a manager's own rules for
+                  // reading data in apply to edited data too.
+                  await settings.read(() => settings0);
                   this.postMutate();
                 },
                 title(): string {
