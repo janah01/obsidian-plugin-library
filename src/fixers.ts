@@ -41,7 +41,7 @@ function isPlainRecord(value: unknown): value is Record<PropertyKey, unknown> {
   return isPlainObject(value);
 }
 
-function enumerableSymbols(value: object): symbol[] {
+function enumerableSymbols(value: object): readonly symbol[] {
   return Object.getOwnPropertySymbols(value).filter((symbol) =>
     Object.prototype.propertyIsEnumerable.call(value, symbol),
   );
@@ -76,7 +76,7 @@ function keepsEverything(unchecked: unknown, fixed: unknown): boolean {
     try {
       return [...Object.keys(left), ...symbols].every(
         (key) =>
-          Object.prototype.hasOwnProperty.call(right, key) &&
+          Object.prototype.propertyIsEnumerable.call(right, key) &&
           isEqualWith(left[key], right[key], compare),
       );
     } finally {

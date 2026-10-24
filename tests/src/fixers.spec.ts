@@ -160,6 +160,17 @@ describe("fixers.ts — settings validation and fixing", () => {
       ).toBe(true);
     });
 
+    it("rejects a key that the fixed value holds but does not list", () => {
+      // A key that is not enumerable is not saved, so the fixer dropped it.
+      const kept = Symbol("kept"),
+        other = Symbol("other"),
+        fixed: Record<PropertyKey, unknown> = { [other]: true };
+      Object.defineProperty(fixed, kept, { enumerable: false, value: true });
+      Object.defineProperty(fixed, "a", { enumerable: false, value: 1 });
+      expect(markFixed({ [kept]: true }, fixed).valid).toBe(false);
+      expect(markFixed({ a: 1 }, fixed).valid).toBe(false);
+    });
+
     it("terminates on cyclic values", () => {
       const cyclic: Record<string, unknown> = {};
       cyclic["self"] = cyclic;
