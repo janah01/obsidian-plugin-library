@@ -314,7 +314,15 @@ export function statusUI(ui: UpdatableUI, element: HTMLElement): StatusUI {
   );
   return deepFreeze({
     report(status?: unknown) {
-      element.textContent = status === void 0 ? null : toJSONOrString(status);
+      if (status === void 0) {
+        element.textContent = null;
+        return;
+      }
+      // An error of a pop-out window is not an `Error` of this window.
+      element.textContent =
+        status instanceof Error || status instanceof activeSelf(element).Error
+          ? status.message
+          : toJSONOrString(status);
     },
   });
 }

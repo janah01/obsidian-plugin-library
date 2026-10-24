@@ -16,6 +16,7 @@ import { linkSetting } from "../../src/settings-widgets.js";
 import type { FrontMatterCache, Notice } from "obsidian";
 import type { PluginContext } from "../../src/plugin.js";
 import { noop } from "es-toolkit/function";
+import { runInNewContext } from "node:vm";
 
 // `UpdatableUI.newSetting` needs text components backed by real elements,
 // which the shared mock lacks: `setValue` writes the element without firing
@@ -768,6 +769,50 @@ describe("obsidian.ts — Obsidian API utilities", () => {
       status.report({ key: "value" });
 
       expect(element.textContent).toBe(toJSONOrString({ key: "value" }));
+    });
+
+    it("shows the message of an error", () => {
+      const element = document.createElement("div");
+
+      statusUI(new UpdatableUI(), element).report(new Error("Malformed data"));
+
+      expect(element.textContent).toBe("Malformed data");
+    });
+
+    it("shows the message of a JSON syntax error", () => {
+      const element = document.createElement("div");
+      let error: unknown = null;
+      try {
+        JSON.parse("{");
+      } catch (caught) {
+        error = caught;
+      }
+      if (!(error instanceof SyntaxError)) {
+        throw new Error("JSON.parse did not throw a SyntaxError");
+      }
+
+      statusUI(new UpdatableUI(), element).report(error);
+
+      expect(element.textContent).toBe(error.message);
+    });
+
+    it("shows the message of an error of either window in a pop-out window", () => {
+      // A pop-out window is another realm with its own `Error`, so an error of
+      // its clipboard is not an `Error` of this window, and the other way round.
+      const PopoutError = runInNewContext("Error") as ErrorConstructor,
+        popoutError = new PopoutError("Document is not focused."),
+        element = document.createElement("div");
+      Object.defineProperty(element, "ownerDocument", {
+        value: { defaultView: { Error: PopoutError } },
+      });
+      const status = statusUI(new UpdatableUI(), element);
+
+      status.report(popoutError);
+      expect(popoutError).not.toBeInstanceOf(Error);
+      expect(element.textContent).toBe("Document is not focused.");
+
+      status.report(new Error("Malformed data"));
+      expect(element.textContent).toBe("Malformed data");
     });
   });
 
