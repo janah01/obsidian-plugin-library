@@ -55,6 +55,10 @@ function keepsEverything(unchecked: unknown, fixed: unknown): boolean {
   // Plain-object pairs being compared; meeting one again closes a cycle.
   const comparing: (readonly [object, object])[] = [];
   const compare = (left: unknown, right: unknown): boolean | undefined => {
+    // A value the fixer kept as it is keeps everything it holds, however deep.
+    if (Object.is(left, right)) {
+      return true;
+    }
     if (!isPlainRecord(left) || !isPlainRecord(right)) {
       // Anything else compares as `isEqual` does, with this rule inside.
       return undefined;

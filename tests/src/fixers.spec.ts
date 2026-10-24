@@ -372,6 +372,17 @@ describe("fixers.ts — settings validation and fixing", () => {
         expect(count).toBeGreaterThan(100);
       }
     });
+
+    it("accepts deep data that the fixer kept as the same object", () => {
+      // A fixer may keep a value it does not know as it is, as the plugin
+      // keeps a profile of an unknown type. Deep equality stops at the same
+      // object, and JSON parses, writes and copies data this deep.
+      const kept: unknown = JSON.parse(
+        `${'{"deep":'.repeat(2000)}1${"}".repeat(2000)}`,
+      );
+      expect(isEqual({ kept }, { kept })).toBe(true);
+      expect(markFixed({ kept }, { added: 1, kept }).valid).toBe(true);
+    });
   });
 
   describe("fixTyped", () => {
