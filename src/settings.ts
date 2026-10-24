@@ -203,6 +203,7 @@ export namespace StorageSettingsManager {
     const unc = launderUnchecked<Type>(self0);
     return markFixed(self0, {
       ...AbstractSettingsManager.fix(self0).value,
+      ...(unc[FAILED] === true ? { [FAILED]: true } : {}),
       recovery: Object.fromEntries(
         Object.entries(launderUnchecked(unc.recovery)).map(([key, value]) => [
           key,
