@@ -343,6 +343,103 @@ describe("settings.ts — settings management", () => {
       expect(mockStorage.getItem).not.toHaveBeenCalled();
     });
 
+    it("keeps the failed marker when local settings change", async () => {
+      // A plugin may change its local settings before it checks the marker,
+      // such as a migration at its first start.
+      const context = {
+          ...mockContext,
+          app: {
+            get appId(): never {
+              throw new Error("appId is gone");
+            },
+          },
+        } as unknown as PluginContext,
+        manager = new StorageSettingsManager(
+          context,
+          StorageSettingsManager.fix,
+          mockStorage,
+        );
+      vi.spyOn(console, "warn").mockImplementation(noop);
+      vi.spyOn(console, "debug").mockImplementation(noop);
+      vi.spyOn(console, "error").mockImplementation(noop);
+      manager.load();
+      await manager.onLoaded;
+
+      await manager.mutate((settings) => {
+        settings.recovery["settings.copy"] = "{}";
+      });
+
+      expect(manager.value.recovery["settings.copy"]).toBe("{}");
+      expect(StorageSettingsManager.hasFailed(manager.value)).toBe(true);
+    });
+
+    it("keeps the failed marker of local settings that keep a malformed copy of data.json", async () => {
+      const local = new StorageSettingsManager(
+          {
+            ...mockContext,
+            app: {
+              get appId(): never {
+                throw new Error("appId is gone");
+              },
+            },
+          } as unknown as PluginContext,
+          StorageSettingsManager.fix,
+          mockStorage,
+        ),
+        fixer: Fixer<SettingsManager.Type & { option: string }> = (data) => {
+          const unc = launderUnchecked<{ option: string }>(data);
+          return markFixed(data, {
+            option: typeof unc.option === "string" ? unc.option : "default",
+          });
+        },
+        settings = new SettingsManager(
+          {
+            ...mockContext,
+            loadData: vi.fn(async () => ({ option: 5 })),
+            localSettings: local,
+            saveData: vi.fn(),
+          } as unknown as PluginContext,
+          fixer,
+        );
+      vi.spyOn(console, "warn").mockImplementation(noop);
+      vi.spyOn(console, "debug").mockImplementation(noop);
+      vi.spyOn(console, "error").mockImplementation(noop);
+      local.load();
+      settings.load();
+      await Promise.all([local.onLoaded, settings.onLoaded]);
+
+      expect(Object.keys(local.value.recovery)).toContainEqual(
+        expect.stringMatching(/^settings\./u),
+      );
+      expect(StorageSettingsManager.hasFailed(local.value)).toBe(true);
+    });
+
+    it("does not mark local settings that were read when they change", async () => {
+      (mockStorage.getItem as ReturnType<typeof vi.fn>).mockReturnValue(
+        JSON.stringify({ recovery: {} }),
+      );
+      const manager = new StorageSettingsManager(
+        mockContext,
+        StorageSettingsManager.fix,
+        mockStorage,
+      );
+      manager.load();
+      await manager.onLoaded;
+
+      await manager.mutate((settings) => {
+        settings.recovery["settings.copy"] = "{}";
+      });
+      await manager.write();
+
+      expect(manager.value.recovery["settings.copy"]).toBe("{}");
+      expect(StorageSettingsManager.hasFailed(manager.value)).toBe(false);
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- expect() does not call the method, only references it
+      expect(mockStorage.setItem).toHaveBeenLastCalledWith(
+        "test-app-id.test-plugin.settings",
+        JSON.stringify({ recovery: { "settings.copy": "{}" } }),
+      );
+    });
+
     it("loads settings from storage", async () => {
       (mockStorage.getItem as ReturnType<typeof vi.fn>).mockReturnValue(
         JSON.stringify({ count: 10, recovery: {} }),

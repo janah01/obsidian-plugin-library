@@ -149,6 +149,20 @@ export class StorageSettingsManager<
     return this.#key();
   }
 
+  public override async mutate(
+    mutator: (settings: DeepWritable<T>) => unknown,
+  ): Promise<void> {
+    // A copy drops symbols, so keep the marker of a store that was not read.
+    if (!StorageSettingsManager.hasFailed(this.value)) {
+      await super.mutate(mutator);
+      return;
+    }
+    await super.mutate(async (settings) => {
+      await mutator(settings);
+      Object.assign(settings, { [StorageSettingsManager.FAILED]: true });
+    });
+  }
+
   public override async write(): Promise<void> {
     const key = await this.key;
     if (key === null) {
