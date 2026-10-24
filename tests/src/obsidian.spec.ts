@@ -676,6 +676,79 @@ describe("obsidian.ts — Obsidian API utilities", () => {
       expect(input.value).toBe("7");
     });
 
+    it("keeps a decimal typed key by key into a focused number input", async () => {
+      const ui = new UpdatableUI();
+      const state = { stored: "14" };
+      const input = linkedInput(ui, state);
+      input.type = "number";
+      // As Chromium on macOS and Windows reports it: `14.` reads as "" with
+      // bad input. Record what the refreshes write.
+      const writes: string[] = [];
+      let text = "14";
+      Object.defineProperty(input, "value", {
+        configurable: true,
+        get: () => (text.endsWith(".") ? "" : text),
+        set: (value: string) => {
+          writes.push(value);
+          text = value;
+        },
+      });
+      Object.defineProperty(input, "validity", {
+        configurable: true,
+        get: () => ({ badInput: text.endsWith(".") }),
+      });
+      input.focus();
+
+      for (const typed of ["14.", "14.5"]) {
+        text = typed;
+        input.dispatchEvent(new Event("input"));
+        await vi.runAllTimersAsync();
+      }
+
+      expect({ stored: state.stored, text, writes }).toEqual({
+        stored: "14.5",
+        text: "14.5",
+        writes: [],
+      });
+    });
+
+    it("shows the stored number at the first refresh after the number input loses focus", async () => {
+      const ui = new UpdatableUI();
+      let stored = 0,
+        input: HTMLInputElement | undefined;
+      ui.newSetting(document.body, (setting) => {
+        setting.addText(
+          linkSetting(
+            () => stored.toString(),
+            (value: string) => {
+              stored = Number(value);
+            },
+            () => {
+              ui.update();
+            },
+            {
+              post(component) {
+                component.inputEl.type = "number";
+                input = component.inputEl;
+              },
+            },
+          ),
+        );
+      });
+      if (!input) throw new Error("addText did not run");
+      input.focus();
+      input.value = "0400";
+      input.dispatchEvent(new Event("input"));
+      await vi.runAllTimersAsync();
+      expect([stored, input.value]).toEqual([400, "0400"]);
+
+      input.blur();
+      expect(input.value).toBe("0400");
+      ui.update();
+
+      expect(input.value).toBe("400");
+    });
+
     it("still resets a field the user is not editing", () => {
       const ui = new UpdatableUI();
       const input = firstRenderOnlyInput(ui);
