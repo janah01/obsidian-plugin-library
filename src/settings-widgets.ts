@@ -27,6 +27,13 @@ export interface ComponentAction<C, V> {
   ) => void;
 }
 
+/**
+ * Links a component to a setting. Writes the current value on every call,
+ * except into a focused number field whose text is not a number yet or already
+ * stands for that number. A change typed while a number field reports bad
+ * input, such as `14.` or `1e`, stores nothing, and the field shows the stored
+ * value again when it loses focus.
+ */
 export function linkSetting<
   V,
   C extends ValueComponent<V> & {
@@ -42,19 +49,70 @@ export function linkSetting<
     if (pre) {
       pre(component);
     }
+    const write = (value: V): void => {
+      const input = numberInput(component);
+      if (
+        input &&
+        input === input.ownerDocument.activeElement &&
+        (input.validity.badInput ||
+          (typeof value === "string" && Number(input.value) === Number(value)))
+      ) {
+        return;
+      }
+      component.setValue(value);
+    };
     const activate = async (value: V): Promise<void> => {
       const ret = await setter(value, component, getter);
       if (typeof ret === "boolean" && !ret) {
-        component.setValue(getter());
+        write(getter());
         return;
       }
       await callback(value, component, getter);
     };
-    component.setValue(getter()).onChange(activate);
+    write(getter());
+    component.onChange(async (value) => {
+      if (numberInput(component)?.validity.badInput) {
+        return;
+      }
+      await activate(value);
+    });
     if (post) {
       post(component, activate);
     }
+    const input = numberInput(component);
+    if (input) {
+      if (!NUMBER_FIELD_LEAVERS.has(input)) {
+        input.addEventListener("blur", () => {
+          NUMBER_FIELD_LEAVERS.get(input)?.();
+        });
+      }
+      // The binder runs again on every refresh, so the latest getter wins.
+      NUMBER_FIELD_LEAVERS.set(input, () => {
+        if (input.validity.badInput) {
+          write(getter());
+        }
+      });
+    }
   };
+}
+
+// What each number field bound by `linkSetting` does when it loses focus: a
+// draft that is not a number stored nothing, so it gives way to the stored
+// value.
+const NUMBER_FIELD_LEAVERS = new WeakMap<HTMLInputElement, () => void>();
+
+function numberInput(component: unknown): HTMLInputElement | null {
+  if (
+    typeof component !== "object" ||
+    component === null ||
+    !("inputEl" in component)
+  ) {
+    return null;
+  }
+  const { inputEl } = component;
+  return instanceOf(inputEl, HTMLInputElement) && inputEl.type === "number"
+    ? inputEl
+    : null;
 }
 
 export function composeSetters<V, C extends ValueComponent<V>>(

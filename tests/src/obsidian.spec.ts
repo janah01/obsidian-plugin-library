@@ -16,6 +16,7 @@ import { linkSetting } from "../../src/settings-widgets.js";
 import type { FrontMatterCache, Notice } from "obsidian";
 import type { PluginContext } from "../../src/plugin.js";
 import { noop } from "es-toolkit/function";
+import { runInNewContext } from "node:vm";
 
 // `UpdatableUI.newSetting` needs text components backed by real elements,
 // which the shared mock lacks: `setValue` writes the element without firing
@@ -634,7 +635,7 @@ describe("obsidian.ts — Obsidian API utilities", () => {
       ]);
     });
 
-    it("writes only the current value to a focused number input", async () => {
+    it("writes nothing to a focused number input that already shows the stored number", async () => {
       const ui = new UpdatableUI();
       const state = { stored: "5" };
       const input = linkedInput(ui, state);
@@ -648,7 +649,7 @@ describe("obsidian.ts — Obsidian API utilities", () => {
       await vi.runAllTimersAsync();
 
       expect(state.stored).toBe("15");
-      expect(write.mock.calls).toEqual([["15"]]);
+      expect(write.mock.calls).toEqual([]);
     });
 
     it("shows a value changed elsewhere in a focused field", () => {
@@ -661,6 +662,92 @@ describe("obsidian.ts — Obsidian API utilities", () => {
       ui.update();
 
       expect(input.value).toBe("python");
+    });
+
+    it("shows a different number changed elsewhere in a focused number input", () => {
+      const ui = new UpdatableUI();
+      const state = { stored: "5" };
+      const input = linkedInput(ui, state);
+      input.type = "number";
+      input.focus();
+      state.stored = "7";
+
+      ui.update();
+
+      expect(input.value).toBe("7");
+    });
+
+    it("keeps a decimal typed key by key into a focused number input", async () => {
+      const ui = new UpdatableUI();
+      const state = { stored: "14" };
+      const input = linkedInput(ui, state);
+      input.type = "number";
+      // As Chromium on macOS and Windows reports it: `14.` reads as "" with
+      // bad input. Record what the refreshes write.
+      const writes: string[] = [];
+      let text = "14";
+      Object.defineProperty(input, "value", {
+        configurable: true,
+        get: () => (text.endsWith(".") ? "" : text),
+        set: (value: string) => {
+          writes.push(value);
+          text = value;
+        },
+      });
+      Object.defineProperty(input, "validity", {
+        configurable: true,
+        get: () => ({ badInput: text.endsWith(".") }),
+      });
+      input.focus();
+
+      for (const typed of ["14.", "14.5"]) {
+        text = typed;
+        input.dispatchEvent(new Event("input"));
+        await vi.runAllTimersAsync();
+      }
+
+      expect({ stored: state.stored, text, writes }).toEqual({
+        stored: "14.5",
+        text: "14.5",
+        writes: [],
+      });
+    });
+
+    it("shows the stored number at the first refresh after the number input loses focus", async () => {
+      const ui = new UpdatableUI();
+      let stored = 0,
+        input: HTMLInputElement | undefined;
+      ui.newSetting(document.body, (setting) => {
+        setting.addText(
+          linkSetting(
+            () => stored.toString(),
+            (value: string) => {
+              stored = Number(value);
+            },
+            () => {
+              ui.update();
+            },
+            {
+              post(component) {
+                component.inputEl.type = "number";
+                input = component.inputEl;
+              },
+            },
+          ),
+        );
+      });
+      if (!input) throw new Error("addText did not run");
+      input.focus();
+      input.value = "0400";
+      input.dispatchEvent(new Event("input"));
+      await vi.runAllTimersAsync();
+      expect([stored, input.value]).toEqual([400, "0400"]);
+
+      input.blur();
+      expect(input.value).toBe("0400");
+      ui.update();
+
+      expect(input.value).toBe("400");
     });
 
     it("still resets a field the user is not editing", () => {
@@ -768,6 +855,106 @@ describe("obsidian.ts — Obsidian API utilities", () => {
       status.report({ key: "value" });
 
       expect(element.textContent).toBe(toJSONOrString({ key: "value" }));
+    });
+
+    it("shows the message of an error", () => {
+      const element = document.createElement("div");
+
+      statusUI(new UpdatableUI(), element).report(new Error("Malformed data"));
+
+      expect(element.textContent).toBe("Malformed data");
+    });
+
+    it("shows the message of a JSON syntax error", () => {
+      const element = document.createElement("div");
+      let error: unknown = null;
+      try {
+        JSON.parse("{");
+      } catch (caught) {
+        error = caught;
+      }
+      if (!(error instanceof SyntaxError)) {
+        throw new Error("JSON.parse did not throw a SyntaxError");
+      }
+
+      statusUI(new UpdatableUI(), element).report(error);
+
+      expect(element.textContent).toBe(error.message);
+    });
+
+    it("shows the message of an error of either window in a pop-out window", () => {
+      // A pop-out window is another realm with its own `Error`, so an error of
+      // its clipboard is not an `Error` of this window, and the other way round.
+      const PopoutError = runInNewContext("Error") as ErrorConstructor,
+        popoutError = new PopoutError("Document is not focused."),
+        element = document.createElement("div");
+      Object.defineProperty(element, "ownerDocument", {
+        value: { defaultView: { Error: PopoutError } },
+      });
+      const status = statusUI(new UpdatableUI(), element);
+
+      status.report(popoutError);
+      expect(popoutError).not.toBeInstanceOf(Error);
+      expect(element.textContent).toBe("Document is not focused.");
+
+      status.report(new Error("Malformed data"));
+      expect(element.textContent).toBe("Malformed data");
+    });
+
+    it("shows the message of an error of any kind", () => {
+      class ImportError extends Error {
+        public override readonly name = "ImportError";
+      }
+      const element = document.createElement("div"),
+        status = statusUI(new UpdatableUI(), element);
+
+      for (const error of [
+        new TypeError("Failed to fetch"),
+        new ImportError("Malformed data"),
+        new DOMException("Document is not focused.", "NotAllowedError"),
+        new AggregateError([new Error("inner")], "Several errors"),
+      ]) {
+        status.report(error);
+        expect(element.textContent).toBe(error.message);
+      }
+    });
+
+    it("shows an empty line for an error without a message and clears it", () => {
+      const element = document.createElement("div"),
+        status = statusUI(new UpdatableUI(), element);
+
+      status.report(new Error("Malformed data"));
+      status.report(new Error());
+      expect(element.textContent).toBe("");
+
+      status.report(new Error("Malformed data"));
+      status.report();
+      expect(element.textContent).toBe("");
+    });
+
+    it("shows a status that only looks like an error as JSON", () => {
+      const element = document.createElement("div"),
+        status = statusUI(new UpdatableUI(), element),
+        lookalike = { message: "Malformed data", name: "Error" };
+
+      status.report(lookalike);
+      expect(element.textContent).toBe(toJSONOrString(lookalike));
+
+      status.report("Malformed data");
+      expect(element.textContent).toBe(toJSONOrString("Malformed data"));
+    });
+
+    it("shows the message of an error in an element without a window", () => {
+      // A document without a window, such as one of a closed pop-out.
+      const element = document.implementation
+          .createHTMLDocument()
+          .createElement("div"),
+        warn = vi.spyOn(console, "warn").mockImplementation(noop);
+
+      statusUI(new UpdatableUI(), element).report(new Error("Malformed data"));
+
+      expect(element.textContent).toBe("Malformed data");
+      expect(warn).not.toHaveBeenCalled();
     });
   });
 

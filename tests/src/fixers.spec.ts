@@ -1,6 +1,8 @@
 /**
  * Comprehensive tests for src/fixers.ts — settings validation and fixing utilities
  */
+import { isEqual, isPlainObject } from "es-toolkit/predicate";
+import { runInNewContext } from "node:vm";
 import { describe, it, expect } from "vitest";
 import {
   markFixed,
@@ -93,6 +95,304 @@ describe("fixers.ts — settings validation and fixing", () => {
         obj: { key: "value" },
       };
       expect(markFixed(unchecked, fixed).valid).toBe(true);
+    });
+
+    it("accepts a value that only lacks a key the fixer added", () => {
+      expect(markFixed({ a: 1 }, { a: 1, b: 2 }).valid).toBe(true);
+    });
+
+    it("accepts a value that only lacks a nested key the fixer added", () => {
+      expect(markFixed({ o: { a: 1 } }, { o: { a: 1, b: 2 } }).valid).toBe(
+        true,
+      );
+    });
+
+    it("accepts an array element that only lacks a key the fixer added", () => {
+      expect(markFixed([{ a: 1 }], [{ a: 1, b: 2 }]).valid).toBe(true);
+    });
+
+    it("accepts an empty object that the fixer filled", () => {
+      expect(markFixed({}, { a: 1, b: { c: 2 } }).valid).toBe(true);
+    });
+
+    it("rejects a changed or retyped value next to an added key", () => {
+      expect(markFixed({ a: 1 }, { a: 2, b: 2 }).valid).toBe(false);
+      expect(markFixed({ a: "1" }, { a: 1 }).valid).toBe(false);
+      expect(markFixed({ o: { a: "1" } }, { o: { a: 1, b: 2 } }).valid).toBe(
+        false,
+      );
+    });
+
+    it("rejects a key the fixer dropped", () => {
+      expect(markFixed({ a: 1, z: 2 }, { a: 1 }).valid).toBe(false);
+      expect(markFixed({ a: 1, o: "x" }, { a: 1 }).valid).toBe(false);
+      expect(
+        markFixed({ o: { a: 1, z: 2 } }, { o: { a: 1, b: 2 } }).valid,
+      ).toBe(false);
+      expect(
+        markFixed(JSON.parse('{"__proto__":{"a":1},"b":1}'), { b: 1 }).valid,
+      ).toBe(false);
+    });
+
+    it("rejects a value that is not a plain object where the fixer made one", () => {
+      expect(markFixed("x", {}).valid).toBe(false);
+      expect(markFixed([], {}).valid).toBe(false);
+      expect(markFixed(null, {}).valid).toBe(false);
+      expect(markFixed({}, []).valid).toBe(false);
+      expect(markFixed({ o: [] }, { o: { a: 1 } }).valid).toBe(false);
+    });
+
+    it("rejects an array that grew or shrank", () => {
+      expect(markFixed([1, 2], [1, 2, 3]).valid).toBe(false);
+      expect(markFixed([1, 2, 3], [1, 2]).valid).toBe(false);
+      expect(markFixed([{ a: 1 }], [{ a: 1 }, { a: 2 }]).valid).toBe(false);
+    });
+
+    it("compares symbol keys strictly", () => {
+      const symbol = Symbol("marker");
+      expect(markFixed({ [symbol]: true }, { recovery: {} }).valid).toBe(false);
+      expect(markFixed({ a: 1 }, { a: 1, [symbol]: true }).valid).toBe(false);
+      expect(markFixed({ [symbol]: true }, { [symbol]: false }).valid).toBe(
+        false,
+      );
+      expect(
+        markFixed({ [symbol]: true }, { [symbol]: true, b: 1 }).valid,
+      ).toBe(true);
+    });
+
+    it("rejects a key that the fixed value holds but does not list", () => {
+      // A key that is not enumerable is not saved, so the fixer dropped it.
+      const kept = Symbol("kept"),
+        other = Symbol("other"),
+        fixed: Record<PropertyKey, unknown> = { [other]: true };
+      Object.defineProperty(fixed, kept, { enumerable: false, value: true });
+      Object.defineProperty(fixed, "a", { enumerable: false, value: 1 });
+      expect(markFixed({ [kept]: true }, fixed).valid).toBe(false);
+      expect(markFixed({ a: 1 }, fixed).valid).toBe(false);
+    });
+
+    it("terminates on cyclic values", () => {
+      const cyclic: Record<string, unknown> = {};
+      cyclic["self"] = cyclic;
+      expect(markFixed(cyclic, { self: cyclic, x: 1 }).valid).toBe(true);
+
+      const even: Record<string, unknown> = {},
+        odd: Record<string, unknown> = { self: even };
+      even["self"] = odd;
+      expect(markFixed(cyclic, even).valid).toBe(true);
+      expect(markFixed(cyclic, { self: { self: 1 } }).valid).toBe(false);
+    });
+
+    it("applies the same rule to values from another window", () => {
+      // A pop-out window is another realm with its own `Object.prototype`.
+      function foreign(source: string): unknown {
+        const ret: unknown = runInNewContext(`(${source})`);
+        return ret;
+      }
+      expect(
+        markFixed(foreign('{ "a": 1, "o": { "l": [{ "b": 1 }] } }'), {
+          a: 1,
+          o: { d: 3, l: [{ b: 1, c: 2 }] },
+        }).valid,
+      ).toBe(true);
+      expect(markFixed(foreign('{ "a": 1, "z": 2 }'), { a: 1 }).valid).toBe(
+        false,
+      );
+      expect(markFixed(foreign('{ "a": "1" }'), { a: 1, b: 2 }).valid).toBe(
+        false,
+      );
+      expect(markFixed(foreign("[1, 2]"), [1, 2, 3]).valid).toBe(false);
+      expect(markFixed(foreign("[]"), {}).valid).toBe(false);
+    });
+
+    it("applies the same rule to objects without a prototype", () => {
+      function bare(
+        entries: Readonly<Record<string, unknown>>,
+      ): Record<string, unknown> {
+        const ret = { ...entries };
+        Reflect.setPrototypeOf(ret, null);
+        return ret;
+      }
+      expect(markFixed(bare({ a: 1 }), { a: 1, b: 2 }).valid).toBe(true);
+      expect(
+        markFixed({ o: bare({ a: 1 }) }, { o: { a: 1, b: 2 } }).valid,
+      ).toBe(true);
+      expect(markFixed(bare({ a: 1, z: 2 }), { a: 1 }).valid).toBe(false);
+      expect(markFixed(bare({ a: 1 }), { a: 2 }).valid).toBe(false);
+    });
+
+    it("ignores the order of keys", () => {
+      expect(markFixed({ b: 2, a: 1 }, { a: 1, c: 3, b: 2 }).valid).toBe(true);
+      expect(
+        markFixed(
+          { o: { y: 1, x: [{ q: 1, p: 2 }] } },
+          { o: { x: [{ p: 2, q: 1, r: 3 }], y: 1 } },
+        ).valid,
+      ).toBe(true);
+    });
+
+    it("counts a key that holds undefined as a key", () => {
+      // JSON cannot hold `undefined`, but a value built in memory can.
+      expect(markFixed({}, { a: undefined }).valid).toBe(true);
+      expect(markFixed({ a: undefined }, {}).valid).toBe(false);
+      expect(markFixed({ a: undefined }, { a: null }).valid).toBe(false);
+    });
+
+    it("differs from deep equality only by the keys the fixer added", () => {
+      // Park-Miller, seeded, so that a failing case can be replayed.
+      let seed = 20_261_024;
+      const LEAVES: readonly unknown[] = [0, 1, -1, 2.5, "", "a", true, null],
+        KEYS: readonly string[] = ["a", "b", "c", "d"],
+        ran = { added: 0, changed: 0, dropped: 0, resized: 0 };
+      function random(): number {
+        seed = (seed * 48_271) % 2_147_483_647;
+        return seed / 2_147_483_647;
+      }
+      function below(count: number): number {
+        return Math.floor(random() * count);
+      }
+      function isRecord(value: unknown): value is Record<string, unknown> {
+        return isPlainObject(value);
+      }
+      function generateObject(depth: number): Record<string, unknown> {
+        return Object.fromEntries(
+          KEYS.filter(() => random() < 0.5).map((key) => [
+            key,
+            generate(depth - 1),
+          ]),
+        );
+      }
+      function generate(depth: number): unknown {
+        const roll = random();
+        if (depth <= 0 || roll < 0.35) {
+          return LEAVES[below(LEAVES.length)];
+        }
+        if (roll < 0.7) {
+          return generateObject(depth);
+        }
+        return Array.from({ length: below(4) }, () => generate(depth - 1));
+      }
+      function copy(value: unknown): unknown {
+        const ret: unknown = JSON.parse(JSON.stringify(value));
+        return ret;
+      }
+      function objectsIn(value: unknown): readonly Record<string, unknown>[] {
+        if (isRecord(value)) {
+          return [value, ...Object.values(value).flatMap(objectsIn)];
+        }
+        return Array.isArray(value) ? value.flatMap(objectsIn) : [];
+      }
+      function arraysIn(value: unknown): readonly unknown[][] {
+        if (Array.isArray(value)) {
+          return [value, ...value.flatMap(arraysIn)];
+        }
+        return isRecord(value) ? Object.values(value).flatMap(arraysIn) : [];
+      }
+      function isLeaf(value: unknown): boolean {
+        return typeof value !== "object" || value === null;
+      }
+      // The rule, restated: drop from `fixed` each key that its counterpart
+      // in `unchecked` lacks, then compare deeply.
+      function prune(fixed: unknown, unchecked: unknown): unknown {
+        if (isRecord(fixed) && isRecord(unchecked)) {
+          return Object.fromEntries(
+            Object.entries(fixed)
+              .filter(([key]) =>
+                Object.prototype.hasOwnProperty.call(unchecked, key),
+              )
+              .map(([key, value]) => [key, prune(value, unchecked[key])]),
+          );
+        }
+        if (Array.isArray(fixed) && Array.isArray(unchecked)) {
+          return fixed.map((item, index) => prune(item, unchecked[index]));
+        }
+        return fixed;
+      }
+      function pick<T>(items: readonly T[]): T | undefined {
+        return items[below(items.length)];
+      }
+
+      for (let round = 0; round < 400; round += 1) {
+        const unchecked = generateObject(4),
+          check = (fixed: unknown, expected: boolean | null): void => {
+            const { valid } = markFixed(unchecked, fixed);
+            expect(valid).toBe(isEqual(unchecked, prune(fixed, unchecked)));
+            if (expected !== null) {
+              expect(valid).toBe(expected);
+            }
+          };
+        check(copy(unchecked), true);
+        check(generateObject(4), null);
+
+        const added = copy(unchecked),
+          addTo = pick(objectsIn(added));
+        if (addTo) {
+          addTo[`added${String(round)}`] = generate(2);
+          check(added, true);
+          ran.added += 1;
+        }
+
+        const changed = copy(unchecked),
+          change = pick([
+            ...objectsIn(changed).flatMap((object) =>
+              Object.keys(object)
+                .filter((key) => isLeaf(object[key]))
+                .map((key) => (): void => {
+                  object[key] = "changed";
+                }),
+            ),
+            ...arraysIn(changed).flatMap((array) =>
+              array
+                .map((item, index) => (isLeaf(item) ? index : -1))
+                .filter((index) => index >= 0)
+                .map((index) => (): void => {
+                  array[index] = "changed";
+                }),
+            ),
+          ]);
+        if (change) {
+          change();
+          check(changed, false);
+          ran.changed += 1;
+        }
+
+        const dropped = copy(unchecked),
+          dropFrom = pick(
+            objectsIn(dropped).filter((object) => Object.keys(object).length),
+          ),
+          dropKey = dropFrom ? pick(Object.keys(dropFrom)) : undefined;
+        if (dropFrom && dropKey !== undefined) {
+          Reflect.deleteProperty(dropFrom, dropKey);
+          check(dropped, false);
+          ran.dropped += 1;
+        }
+
+        const resized = copy(unchecked),
+          resize = pick(arraysIn(resized));
+        if (resize) {
+          if (resize.length && random() < 0.5) {
+            resize.pop();
+          } else {
+            resize.push(generate(1));
+          }
+          check(resized, false);
+          ran.resized += 1;
+        }
+      }
+      for (const count of Object.values(ran)) {
+        expect(count).toBeGreaterThan(100);
+      }
+    });
+
+    it("accepts deep data that the fixer kept as the same object", () => {
+      // A fixer may keep a value it does not know as it is, as the plugin
+      // keeps a profile of an unknown type. Deep equality stops at the same
+      // object, and JSON parses, writes and copies data this deep.
+      const kept: unknown = JSON.parse(
+        `${'{"deep":'.repeat(2000)}1${"}".repeat(2000)}`,
+      );
+      expect(isEqual({ kept }, { kept })).toBe(true);
+      expect(markFixed({ kept }, { added: 1, kept }).valid).toBe(true);
     });
   });
 

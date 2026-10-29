@@ -191,6 +191,12 @@ export abstract class AdvancedSettingTab<
       },
       ui,
     } = this;
+    // The tab draws again on every change in a field, so check the copies
+    // again only when the local settings that hold them changed.
+    let recoverable: {
+      readonly malformed: boolean;
+      readonly recovery: typeof localSettings.value.recovery;
+    } | null = null;
     ui.newSetting(containerEl, (setting) => {
       // Disabling undo is required for its CTA status to work properly
       let undoable = false;
@@ -203,9 +209,9 @@ export abstract class AdvancedSettingTab<
             .onClick(() => {
               new EditDataModal(context, settings.value, fixer, {
                 callback: async (settings0): Promise<void> => {
-                  await settings.mutate((settingsM) => {
-                    Object.assign(settingsM, settings0);
-                  });
+                  // As Reload does, so that a manager's own rules for
+                  // reading data in apply to edited data too.
+                  await settings.read(() => settings0);
                   this.postMutate();
                 },
                 title(): string {
@@ -250,12 +256,19 @@ export abstract class AdvancedSettingTab<
                 },
               ).open();
             });
-          if (
-            StorageSettingsManager.getRecovery(
-              localSettings.value.recovery,
-              SettingsManager.RECOVERY_PREFIX,
-            ).size !== 0
-          ) {
+          const { recovery } = localSettings.value;
+          if (recoverable?.recovery !== recovery) {
+            recoverable = {
+              malformed: [
+                ...StorageSettingsManager.getRecovery(
+                  recovery,
+                  SettingsManager.RECOVERY_PREFIX,
+                ).values(),
+              ].some((copy) => isStillMalformed(fixer, copy)),
+              recovery,
+            };
+          }
+          if (recoverable.malformed) {
             button.setCta();
           }
         })
@@ -432,4 +445,19 @@ export abstract class AdvancedSettingTab<
   }
 
   protected abstract snapshot0(): Partial<S>;
+}
+
+/**
+ * Whether the current fixer still rejects a recovery copy of the settings. A
+ * copy it accepts lost nothing when it was fixed, such as one an older
+ * version saved because a newer version only added settings, so it does not
+ * ask for attention. A copy that does not parse does.
+ */
+function isStillMalformed<T>(fixer: Fixer<T>, copy: string): boolean {
+  try {
+    return !fixer(JSON.parse(copy)).valid;
+  } catch (error) {
+    /* @__PURE__ */ self.console.debug(error);
+    return true;
+  }
 }

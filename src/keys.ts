@@ -62,10 +62,12 @@ export function newHotkeyListener(
                     bakedHotkeys = cloneAsWritable(this.bakedHotkeys);
                     bakedIds = cloneAsWritable(this.bakedIds);
                   } finally {
+                    // Setting keys appends their command, and the first match
+                    // of a key runs, so put every user key back in its order.
+                    for (const id of Object.keys(this.customKeys)) {
+                      this.removeHotkeys(id);
+                    }
                     for (const [id, hotkey] of Object.entries(customKeysOld)) {
-                      if (!ids || ids.has(id)) {
-                        continue;
-                      }
                       this.setHotkeys(id, hotkey);
                     }
                   }

@@ -27,6 +27,7 @@ import {
   anyToError,
   asyncDebounce,
   clearProperties,
+  cloneAsWritable,
   copyOnWriteAsync,
   deepFreeze,
   lazyInit,
@@ -149,6 +150,20 @@ export class StorageSettingsManager<
     return this.#key();
   }
 
+  public override async mutate(
+    mutator: (settings: DeepWritable<T>) => unknown,
+  ): Promise<void> {
+    // A copy drops symbols, so keep the marker of a store that was not read.
+    if (!StorageSettingsManager.hasFailed(this.value)) {
+      await super.mutate(mutator);
+      return;
+    }
+    await super.mutate(async (settings) => {
+      await mutator(settings);
+      Object.assign(settings, { [StorageSettingsManager.FAILED]: true });
+    });
+  }
+
   public override async write(): Promise<void> {
     const key = await this.key;
     if (key === null) {
@@ -203,6 +218,7 @@ export namespace StorageSettingsManager {
     const unc = launderUnchecked<Type>(self0);
     return markFixed(self0, {
       ...AbstractSettingsManager.fix(self0).value,
+      ...(unc[FAILED] === true ? { [FAILED]: true } : {}),
       recovery: Object.fromEntries(
         Object.entries(launderUnchecked(unc.recovery)).map(([key, value]) => [
           key,
@@ -339,7 +355,7 @@ export function registerSettingsCommands(context: PluginContext): void {
                   throw new Error(i18n.t("errors.retry-outdated-frontmatter"));
                 }
                 clearProperties(fm);
-                Object.assign(fm, context.settings);
+                Object.assign(fm, cloneAsWritable(settings.value));
               })
               .catch((error: unknown) => {
                 printError(

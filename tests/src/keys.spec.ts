@@ -458,6 +458,231 @@ describe("keys.ts — hotkey management", () => {
     });
   });
 
+  describe("held keys with Obsidian's hotkey table", () => {
+    interface Key {
+      readonly modifiers: readonly string[];
+      readonly key: string;
+    }
+    interface BakedKey {
+      readonly modifiers: string;
+      readonly key: string;
+    }
+
+    const LISTED = "terminal:clear-terminal",
+      UNLISTED = "command-palette:open",
+      compile = (modifiers: readonly string[]): string =>
+        [...modifiers].sort().join(","),
+      // `Keymap.isMatch` of Obsidian 1.14.4.
+      isMatch = (hotkey: BakedKey, ctx: KeymapContext): boolean =>
+        hotkey.modifiers === ctx.modifiers &&
+        (!hotkey.key ||
+          hotkey.key === ctx.vkey ||
+          (ctx.key !== null &&
+            hotkey.key.toLowerCase() === ctx.key.toLowerCase()));
+
+    /**
+     * The hotkey table of Obsidian 1.14.4: the user's keys are handed out as a
+     * copy, and `bake` lists them before the default keys of the commands the
+     * user did not rebind.
+     */
+    class HotkeyTable {
+      public readonly defaultKeys: Record<string, readonly Key[]> = {};
+      public baked = false;
+      public bakedHotkeys: readonly BakedKey[] = [];
+      public bakedIds: readonly string[] = [];
+      readonly #customKeys: Record<string, readonly Key[]> = {};
+
+      public get customKeys(): Record<string, readonly Key[]> {
+        return { ...this.#customKeys };
+      }
+
+      public setHotkeys(id: string, keys: readonly Key[]): void {
+        this.#customKeys[id] = keys;
+        this.baked = false;
+      }
+
+      public removeHotkeys(id: string): void {
+        // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- as Obsidian does
+        delete this.#customKeys[id];
+        this.baked = false;
+      }
+
+      public bake(): void {
+        if (this.baked) return;
+        this.baked = true;
+        const custom = Object.entries(this.#customKeys),
+          entries = [
+            ...custom,
+            ...Object.entries(this.defaultKeys).filter(
+              ([id]) => !(id in this.#customKeys),
+            ),
+          ].flatMap(([id, keys]) => keys.map((key) => ({ id, key })));
+        this.bakedIds = entries.map(({ id }) => id);
+        this.bakedHotkeys = entries.map(({ key: { key, modifiers } }) => ({
+          key,
+          modifiers: compile(modifiers),
+        }));
+      }
+    }
+
+    function setup() {
+      const table = new HotkeyTable(),
+        commands = new Map(
+          [LISTED, UNLISTED].map((id) => [id, { id, name: id }]),
+        ),
+        // Obsidian reports success unless the command throws.
+        executeCommand = vi.fn(() => true);
+      table.defaultKeys[LISTED] = [{ key: "k", modifiers: ["Ctrl", "Shift"] }];
+      table.setHotkeys(UNLISTED, [{ key: "p", modifiers: ["Ctrl"] }]);
+      const context = {
+        app: {
+          commands: {
+            executeCommand,
+            findCommand: (id: string) => commands.get(id),
+          },
+          hotkeyManager: table,
+          keymap: { constructor: { isMatch } },
+        },
+        language: { value: { t: (key: string) => key } },
+        register: vi.fn(),
+      } as unknown as PluginContext;
+      return { context, executeCommand, table };
+    }
+
+    // One key-down, as Obsidian hands it to the listener.
+    function send(
+      listener: KeymapEventListener,
+      { key, modifiers }: Key,
+      repeat: boolean,
+    ): unknown {
+      const result: unknown = listener(
+        new KeyboardEvent("keydown", { key, repeat }),
+        { key, modifiers: compile(modifiers), vkey: key },
+      );
+      return result;
+    }
+
+    // The key-down, then three key-downs with `repeat` set.
+    function hold(
+      listener: KeymapEventListener,
+      key: Key,
+      repeats = 3,
+    ): unknown[] {
+      return Array.from({ length: repeats + 1 }, (_, index) =>
+        send(listener, key, index > 0),
+      );
+    }
+
+    const listedKey = { key: "k", modifiers: ["Ctrl", "Shift"] },
+      unlistedKey = { key: "p", modifiers: ["Ctrl"] },
+      repeat = (listener: KeymapEventListener, key: Key): unknown =>
+        send(listener, key, true);
+
+    it("consumes a held hotkey on the list and passes one off the list on", () => {
+      const { context, executeCommand } = setup(),
+        listener = newHotkeyListener(context, new Set([LISTED]));
+
+      expect(hold(listener, listedKey)).toStrictEqual([
+        false,
+        false,
+        false,
+        false,
+      ]);
+      expect(hold(listener, unlistedKey)).toStrictEqual([
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+      ]);
+
+      expect(executeCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ id: LISTED }),
+      );
+    });
+
+    it.each(["after", "before"])(
+      "answers by its own list when a listener for every command, made %s it, shares the table",
+      (order) => {
+        const { context, executeCommand, table } = setup(),
+          ids = new Set([LISTED]),
+          make = (): readonly [KeymapEventListener, KeymapEventListener] => {
+            if (order === "after") {
+              const listed = newHotkeyListener(context, ids);
+              return [listed, newHotkeyListener(context)];
+            }
+            const every = newHotkeyListener(context);
+            return [newHotkeyListener(context, ids), every];
+          },
+          [listed, every] = make();
+
+        expect(repeat(listed, unlistedKey)).toBeUndefined();
+        expect(repeat(every, unlistedKey)).toBe(false);
+        expect(repeat(listed, listedKey)).toBe(false);
+        expect(repeat(every, listedKey)).toBe(false);
+        expect(executeCommand).not.toHaveBeenCalled();
+
+        expect(hold(listed, unlistedKey, 0)).toStrictEqual([undefined]);
+        expect(hold(every, unlistedKey, 0)).toStrictEqual([false]);
+        expect(executeCommand).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ id: UNLISTED }),
+        );
+
+        // Obsidian's own table outside the terminal still has every hotkey.
+        expect([...table.bakedIds].sort()).toStrictEqual(
+          [LISTED, UNLISTED].sort(),
+        );
+        expect(table.customKeys).toStrictEqual({
+          [UNLISTED]: [unlistedKey],
+        });
+      },
+    );
+
+    it("follows a changed list at the next key once the table is stale", () => {
+      const { context, executeCommand, table } = setup(),
+        ids = new Set([LISTED]),
+        listener = newHotkeyListener(context, ids);
+
+      expect(repeat(listener, listedKey)).toBe(false);
+
+      ids.delete(LISTED);
+      table.baked = false;
+      expect(repeat(listener, listedKey)).toBeUndefined();
+
+      ids.add(LISTED);
+      table.baked = false;
+      expect(repeat(listener, listedKey)).toBe(false);
+
+      expect(executeCommand).not.toHaveBeenCalled();
+    });
+
+    it("keeps the order of the user's hotkeys, so a shared key runs what it ran before", () => {
+      const { context, table } = setup(),
+        // The command that Obsidian's own listener runs: the first match.
+        runs = (key: Key): string | undefined => {
+          table.bake();
+          const ctx = {
+            key: key.key,
+            modifiers: compile(key.modifiers),
+            vkey: key.key,
+          };
+          return table.bakedIds[
+            table.bakedHotkeys.findIndex((hotkey) => isMatch(hotkey, ctx))
+          ];
+        };
+      // The user gave Ctrl+P to the palette first, then to the listed command.
+      table.setHotkeys(LISTED, [unlistedKey]);
+      const stored = Object.keys(table.customKeys);
+      expect(runs(unlistedKey)).toBe(UNLISTED);
+
+      newHotkeyListener(context, new Set([LISTED]));
+      // Obsidian bakes again after any change of a hotkey.
+      table.baked = false;
+
+      expect(runs(unlistedKey)).toBe(UNLISTED);
+      expect(Object.keys(table.customKeys)).toStrictEqual(stored);
+    });
+  });
+
   describe("ID filtering", () => {
     it("only processes hotkeys for specified IDs", () => {
       const ids = new Set(["command-1"]);
@@ -573,6 +798,60 @@ describe("keys.ts — hotkey management", () => {
 
       // eslint-disable-next-line @typescript-eslint/unbound-method -- expect() does not call the method, only references it
       expect(mockContext.register).toHaveBeenCalled();
+    });
+
+    it("keeps the order of the user's hotkeys, so a shared key runs what it ran before", () => {
+      // The hotkey table of Obsidian 1.14.4: it hands out a copy of the
+      // user's keys, appends a command whose keys it sets, and bakes the
+      // user's keys in their order. The first match of a key runs.
+      class HotkeyTable {
+        public baked = false;
+        public bakedHotkeys: readonly unknown[] = [];
+        public bakedIds: readonly string[] = [];
+        public readonly defaultKeys: Record<string, readonly unknown[]> = {};
+        readonly #own = new Map<string, readonly unknown[]>();
+
+        public get customKeys(): Record<string, readonly unknown[]> {
+          return Object.fromEntries(this.#own);
+        }
+
+        public setHotkeys(id: string, keys: readonly unknown[]): void {
+          this.#own.set(id, keys);
+          this.baked = false;
+        }
+
+        public removeHotkeys(id: string): void {
+          this.#own.delete(id);
+          this.baked = false;
+        }
+
+        public bake(): void {
+          if (this.baked) {
+            return;
+          }
+          this.baked = true;
+          this.bakedIds = [...this.#own].flatMap(([id, keys]) =>
+            keys.map(() => id),
+          );
+        }
+      }
+      const table = new HotkeyTable(),
+        ctrlP = [{ key: "p", modifiers: ["Ctrl"] }];
+      // The user gave Ctrl+P to the palette first, then to a listed command.
+      table.setHotkeys("command-palette:open", ctrlP);
+      table.setHotkeys("command-1", ctrlP);
+      mockApp.hotkeyManager = table as unknown as MockHotkeyManager;
+
+      newHotkeyListener(mockContext, new Set(["command-1"]));
+      // Obsidian bakes again after any change of a hotkey.
+      table.baked = false;
+      table.bake();
+
+      expect(Object.keys(table.customKeys)).toEqual([
+        "command-palette:open",
+        "command-1",
+      ]);
+      expect(table.bakedIds[0]).toBe("command-palette:open");
     });
   });
 
